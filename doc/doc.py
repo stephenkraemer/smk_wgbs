@@ -1,0 +1,76 @@
+# * Introduction
+# ** installation
+
+# *** recommended: install as python package.
+
+# Advantages
+#   - version control
+#   - (automatic installation of dependencies - not yet)
+
+# installation
+# - first create conda env
+# - clone git repo
+# - install python package (as develop)
+
+# #+begin_src shell
+# /home/stephen/projects/smk_wgbs/smk_wgbs/wgbs_alignment_env.yaml
+# git clone
+# pip install -e 
+# #+end_src
+
+# *** clone git repo, directly use snakefile 
+# snakefile: smk_wgbs/smk_wgbs/wgbs_alignment.smk
+
+
+# ** Input data structure
+# *** Expected hierarchical organisation of the data
+
+# - sample, e.g. bulk_hsc, eslam_cell
+#   - [optional] cell or minibulk id, if applicable
+#     - [optional] library: set of fastq pairs which should be treated as a unit for pcr duplicate removal. several libraries may be merged together into the final bam after PCR duplicate removal per library
+#       - lane: one pair of fastq files per lane per (sample, cell, library) allowed
+#         - read: paired end data are expected
+# ** Workflow configuration 
+# *** Metadata table
+# **** Schema
+# as tsv
+
+# Fields
+# - sample
+# - cell_minibulk
+# - library
+# - lane
+# - read
+# **** Tools for generation metadata tables automatically
+
+# *** Config file
+
+# See smk_wgbs/doc/demo_config.yaml for commented example with all required and optional config variables
+# ** Running alignments
+# *** from python
+# see example notebook
+# *** from command line
+
+# 1. Generate config file, e.g. by copying demo configfile and editing as needed (smk_wgbs/doc/demo_config.yaml)
+# 2. Generate metadata table (see )
+#    1. metadata table tsv location can be specified in config file or passed via --config metadata_table_tsv=/path/to/file.tsv
+#       It is not uncommon that config files are re-used, with only the metadata table being changed. In these cases, passing the different
+#       metadata table paths via the command line while leaving the config file unchanged can be practical.
+# 3. Run snakemake workflow as usual, e.g.
+
+# #+begin_src shell
+#   snakemake \
+#   --snakefile smk_wgbs/smk_wgbs.smk \
+#   --configfile /path/to/config/file \        
+#   # optionally specify metadata_table_tsv path on commandline
+#   # --config metadata_table_tsv=/test/
+#   --latency-wait 60 \
+#   --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
+#   --jobs 1000 \
+#   --dryrun \
+# #+end_src
+
+
+
+
+

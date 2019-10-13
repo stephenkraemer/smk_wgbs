@@ -1,0 +1,18 @@
+metadata_table_tsv:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/alignment-metadata/bravo-pilot.tsv
+log_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/logs
+rpp_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-pid
+genome_dir:
+  /icgc/dkfzlsdf/analysis/B080/kraemers/projects/mbias/sandbox/genomes/GRCm38mm10_PhiX_Lambda_bismark
+
+result_patterns:
+  trimmed_fastq:
+    {pid}/{cell_id}/raw_data/run{run_id}/AS-{as_id}-LR-{lane_id}_R{read_number}.trimmed.fastq.gz
+  bam:
+    {pid}/{cell_id}/alignment/{pid}_{cell_id}.bam
+  # --basename to control name in bismark currently not compatible with multicore run
+  # so we have to use the fastq stem (bismarks default)
+  bam_per_lane_read:
+    {pid}/{cell_id}/alignment/partial-alignments/lane-alignments/{run_id}/AS-{as_id}-LR-{lane_id}_R{read_number}.trimmed_bismark_bt2.bam
