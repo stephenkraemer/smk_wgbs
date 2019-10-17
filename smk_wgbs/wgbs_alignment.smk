@@ -15,20 +15,25 @@ reindex methylation calls	90
 save as pickle / parquet / hdf5	10
 7.25
 
+
+export PATH=/home/kraemers/projects/Bismark:$PATH
+
 snakemake \
 --snakefile /home/kraemers/projects/smk_wgbs/smk_wgbs/wgbs_alignment.smk \
 --latency-wait 60 \
---cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --configfile /home/kraemers/projects/smk_wgbs/doc/demo_config.yaml \
---forcerun bismark_se_local_alignment_per_lane \
---until bismark_se_local_alignment_per_lane \
 --jobs 1000 \
+--cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
+--forcerun bismark_se_local_alignment_per_lane \
+
+--forcerun methyldackel_se_CG_per_cytosine \
 
 --dryrun \
+
+--until bismark_se_local_alignment_per_lane \
 --forcerun trim_reads_pe \
 
 
---forcerun methyldackel_se_CG_per_cytosine \
 
 --forcerun bismark_se_merge_library_mdup \
 --forcerun bismark_se_merge_libraries \
@@ -90,7 +95,7 @@ if 'fastq_pattern' in config:
             Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv'),
             header=True, index=False, sep='\t')
     # REMOVE
-    metadata_table = metadata_table.iloc[0:2].copy()
+    # metadata_table = metadata_table.iloc[0:2].copy()
     # \REMOVE
 else:
     metadata_table = pd.read_csv(config['metadata_table_tsv'], sep='\t', header=0, index=False)
@@ -291,8 +296,8 @@ rule methyldackel_se_CG_per_cytosine:
          ref_genome_unconverted = ancient(config['genome_fa']),
     output:
         bedgraph = str(Path(config['result_patterns']['mcalls_se_cg_per_cyt']).with_suffix('.bedGraph')),
-        bed = config['result_patterns']['mcalls_se_cg_per_cyt'],
-        parquet = str(Path(config['result_patterns']['mcalls_se_cg_per_cyt']).with_suffix('.parquet')),
+        # bed = config['result_patterns']['mcalls_se_cg_per_cyt'],
+        # parquet = str(Path(config['result_patterns']['mcalls_se_cg_per_cyt']).with_suffix('.parquet')),
     params:
           avg_mem = 6000,
           max_mem = 10000,
@@ -325,13 +330,12 @@ rule methyldackel_se_CG_per_cytosine:
             """.split()
         )
         print('Done with MethylDackel')
-
         # NOTE: parquet does not retain the categorical dtype atm
         print('Create parquet and BED file')
         chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
         df = pd.read_csv(
-                # output.bedGraph,
-                '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/lsk150_pr-hiera_ex-scnmt-1_cls-1/blood31/meth-calls/partial-meth-calls/SE_lsk150_pr-hiera_ex-scnmt-1_cls-1_blood31_per-cytosine_CpG.bedGraph',
+                # output.bedgraph,
+                '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/hsc_pr-scbs_ex-test-1_cls-10_1/blood/meth-calls/partial-meth-calls/SE_hsc_pr-scbs_ex-test-1_cls-10_1_blood_per-cytosine_CpG.bedGraph',
                 sep='\t',
                 skiprows=1,
                 names=['#Chromosome', 'Start', 'End', 'beta_value', 'n_meth', 'n_unmeth'],

@@ -25,8 +25,8 @@ fastq_pattern:
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1
-#  - hsc_pr-scbs_ex-test-1_cls-1_1
+  - hsc_pr-scbs_ex-test-1_cls-10_1
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-1
 
 
 # Other input paths
@@ -71,6 +71,8 @@ result_patterns:
     '{entity}/{sample}/alignment/{entity}_{sample}_R{read_number}.bam'
   mcalls_se_cg_per_cyt:
     '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_CpG.bed'
+  mcalls_se_chh_sample_per_cyt:
+    '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_CHH.bed'
   se_bam:
     '{entity}/{sample}/alignment/partial-alignments/SE_{entity}_{sample}.bam'
   library_bam:
