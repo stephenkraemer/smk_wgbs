@@ -24,7 +24,7 @@ def sel_expand(template, **kwargs):
     return res
 
 
-def get_files_df(wildcard_pattern: str, field_constraints: Optional[Dict] = None):
+def create_metadata_table_from_file_pattern(wildcard_pattern: str, field_constraints: Optional[Dict] = None):
     """Create metadata table for all files matching a snakemake-like pattern
 
     Output: metadata table with these columns:
