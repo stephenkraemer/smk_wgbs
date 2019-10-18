@@ -20,15 +20,16 @@ export PATH=/home/kraemers/projects/Bismark:$PATH
 
 snakemake \
 --snakefile /home/kraemers/projects/smk_wgbs/smk_wgbs/wgbs_alignment.smk \
---latency-wait 60 \
+--latency-wait 120 \
 --configfile /home/kraemers/projects/smk_wgbs/doc/demo_config.yaml \
 --jobs 1000 \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
---forcerun bismark_se_local_alignment_per_lane \
+--dryrun \
 
 --forcerun methyldackel_se_CG_per_cytosine \
+--forcerun trim_reads_pe \
 
---dryrun \
+
 
 --until bismark_se_local_alignment_per_lane \
 --forcerun trim_reads_pe \
@@ -114,7 +115,8 @@ wildcard_constraints:
 
 lane_alignments = []
 for _, row_ser in metadata_table.iterrows():
-    lane_alignments.append(sel_expand(config['result_patterns']['mcalls_se_cg_per_cyt'].replace('.bed', '.bedGraph'), **row_ser))
+    lane_alignments.append(sel_expand(config['result_patterns']['mcalls_se_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CpG'))
+    lane_alignments.append(sel_expand(config['result_patterns']['mcalls_se_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CHH'))
 
 
 rule all:
@@ -156,26 +158,25 @@ rule bismark_se_local_alignment_per_lane:
     # non specified output files: will not be auto-removed
     params:
         genome_dir = config['genome_dir'],
-        avg_mem = 50000,
-        max_mem = 60000,
+        avg_mem = 12000,
+        max_mem = 16000,
         name = 'bismark_alignment_{entity}_{sample}',
-        walltime = '04:00',
+        walltime = '12:00',
         output_dir = lambda wildcards, output: str(Path(output.bam).parent),
         temp_dir = lambda wildcards, output: str(Path(output.bam).parent.joinpath('bismark_tempfiles')),
-    threads: 24
+    threads: 6
     log:
         config['log_dir'] + '/bismark_atomic-alignment_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
     # basename and multicore together are not possible
     # --score_min G,10,2 \
     # --local
+    # --parallel 4 \
     shell:
         """
         bismark \
         --single_end {input.fq} \
-        --parallel 4 \
         --non_directional \
         --local \
-        --upto 100000 \
         --output_dir {params.output_dir} \
         --temp_dir {params.temp_dir}\
         {params.genome_dir} \
@@ -290,26 +291,37 @@ rule bismark_se_merge_libraries:
 
 # ==============================================================================
 
+def get_motif_params_str(wildcards):
+    if wildcards.motif == 'CpG':
+        return ''
+    elif wildcards.motif == 'CHH':
+        chromosome1_name = config['chromosomes'][0]
+        return f'--CHH --noCpG -r {chromosome1_name}:40000000-100000000'
+    else:
+        raise ValueError()
+
+
 rule methyldackel_se_CG_per_cytosine:
     input:
          bam = config['result_patterns']['se_bam'],
          ref_genome_unconverted = ancient(config['genome_fa']),
     output:
-        bedgraph = str(Path(config['result_patterns']['mcalls_se_cg_per_cyt']).with_suffix('.bedGraph')),
-        # bed = config['result_patterns']['mcalls_se_cg_per_cyt'],
-        # parquet = str(Path(config['result_patterns']['mcalls_se_cg_per_cyt']).with_suffix('.parquet')),
+        bedgraph = str(Path(config['result_patterns']['mcalls_se_cytosines_per_motif']).with_suffix('.bedGraph')),
+        bed = config['result_patterns']['mcalls_se_cytosines_per_motif'],
+        parquet = str(Path(config['result_patterns']['mcalls_se_cytosines_per_motif']).with_suffix('.parquet')),
     params:
           avg_mem = 6000,
           max_mem = 10000,
-          name = 'methyldackel_se_CG_per_cytosine_{entity}_{sample}',
+          name = 'methyldackel_se_{motif}_per_cytosine_{entity}_{sample}',
           walltime = '02:00',
-          prefix = lambda wildcards, output: output.bedgraph.replace('_CpG.bedGraph', ''),
+          prefix = lambda wildcards, output: output.bedgraph.replace(f'_{wildcards.motif}.bedGraph', ''),
           # TODO: is config directly available in rule?
           chromosomes = config['chromosomes'],
+          motif_params = get_motif_params_str,
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
-       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:_{entity}_{sample}.log'
+       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:_{entity}_{sample}_{motif}.log'
     run:
         import subprocess
         import pandas as pd
@@ -321,6 +333,7 @@ rule methyldackel_se_CG_per_cytosine:
             MethylDackel extract \
             --ignoreFlags 3840 \
             --requireFlags 0 \
+            {params.motif_params} \
             -o {params.prefix} \
             -q 15 \
             -p 15 \
@@ -334,8 +347,8 @@ rule methyldackel_se_CG_per_cytosine:
         print('Create parquet and BED file')
         chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
         df = pd.read_csv(
-                # output.bedgraph,
-                '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/hsc_pr-scbs_ex-test-1_cls-10_1/blood/meth-calls/partial-meth-calls/SE_hsc_pr-scbs_ex-test-1_cls-10_1_blood_per-cytosine_CpG.bedGraph',
+                output.bedgraph,
+                # '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/hsc_pr-scbs_ex-test-1_cls-10_1/blood/meth-calls/partial-meth-calls/SE_hsc_pr-scbs_ex-test-1_cls-10_1_blood_per-cytosine_CpG.bedGraph',
                 sep='\t',
                 skiprows=1,
                 names=['#Chromosome', 'Start', 'End', 'beta_value', 'n_meth', 'n_unmeth'],

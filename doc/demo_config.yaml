@@ -25,8 +25,37 @@ fastq_pattern:
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
-  - hsc_pr-scbs_ex-test-1_cls-10_1
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-1
+  - lsk150_pr-hiera_ex-scnmt-1_cls-1
+  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+  - lsk150_pr-hiera_ex-sctm-1_cls-0
+  - lsk150_pr-hiera_ex-sctm-1_cls-1
+  - lsk150_pr-hiera_ex-sctm-1_cls-25
+#  - bcells_pr-scbs_ex-test-1_cls-100_1
+#  - bcells_pr-scbs_ex-test-1_cls-10_1
+#  - bcells_pr-scbs_ex-test-1_cls-1_1
+#  - bcells_pr-scbs_ex-test-1_cls-1_2
+#  - bcells_pr-scbs_ex-test-1_cls-1_3
+#  - bcells_pr-scbs_ex-test-1_cls-1_4
+#  - bcells_pr-scbs_ex-test-1_cls-1_5
+#  - bcells_pr-scbs_ex-test-1_cls-1_6
+#  - ctr_pr-scbs_ex-test-1_cls-0_1
+#  - hsc_pr-scbs_ex-test-1_cls-10_1
+#  - hsc_pr-scbs_ex-test-1_cls-1_1
+#  - hsc_pr-scbs_ex-test-1_cls-1_2
+#  - hsc_pr-scbs_ex-test-1_cls-1_3
+#  - hsc_pr-scbs_ex-test-1_cls-1_4
+#  - hsc_pr-scbs_ex-test-1_cls-1_5
+#  - hsc_pr-scbs_ex-test-1_cls-1_6
+#  - hsc_pr-scbs_ex-test-1_cls-1_7
+#  - hsc_pr-scbs_ex-test-1_cls-1_8
+#  - monos_pr-scbs_ex-test-1_cls-10_1
+#  - monos_pr-scbs_ex-test-1_cls-1_1
+#  - monos_pr-scbs_ex-test-1_cls-1_2
+#  - monos_pr-scbs_ex-test-1_cls-1_3
+#  - monos_pr-scbs_ex-test-1_cls-1_4
+#  - monos_pr-scbs_ex-test-1_cls-1_5
 
 
 # Other input paths
@@ -69,10 +98,8 @@ result_patterns:
   # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
   bam_per_read:
     '{entity}/{sample}/alignment/{entity}_{sample}_R{read_number}.bam'
-  mcalls_se_cg_per_cyt:
-    '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_CpG.bed'
-  mcalls_se_chh_sample_per_cyt:
-    '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_CHH.bed'
+  mcalls_se_cytosines_per_motif:
+    '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}.bed'
   se_bam:
     '{entity}/{sample}/alignment/partial-alignments/SE_{entity}_{sample}.bam'
   library_bam:
