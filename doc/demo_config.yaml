@@ -1,3 +1,5 @@
+name: default-params
+
 # FASTQ Metadata table
 # --------------------
 
@@ -12,7 +14,7 @@
 # else: metadata table is read from this location
 # [required]
 metadata_table_tsv:
-  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/alignment-metadata/bravo-pilot.tsv
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/metadata/ngs-experiments/scmt-scnmt-bravo-pilot.tsv
 
 # if a fastq_pattern is provided, it must have the fields: entity, sample, read_number and it must additionally have at least one additional field which serves to distinguish read pairs (even if this is not really necessary for the given dataset).
 # The fastq_pattern will be used to create a metadata table with one column per field (using smk_wgbs.create_metadata_table_from_file_pattern).
@@ -21,17 +23,25 @@ metadata_table_tsv:
 fastq_pattern:
   /icgc/dkfzlsdf/project/mouse_hematopoiesis_PBAT/sequencing/whole_genome_bisulfite_tagmentation_sequencing/view-by-pid/{entity}/{sample}/paired/run{run}/sequence/AS-{asid}-LR-{lane}_R{read_number}.fastq.gz
 
+protocol: scnmt
+
+protocol_flags:
+  scnmt:
+    is_nome_seq: True
+  sctm:
+    is_nome_seq: False
+
 # a list of entity names can be used to restrict the analysis to the specified samples
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
   - lsk150_pr-hiera_ex-scnmt-1_cls-1
-  - lsk150_pr-hiera_ex-scnmt-1_cls-0
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
-  - lsk150_pr-hiera_ex-scnmt-1_cls-25
-  - lsk150_pr-hiera_ex-sctm-1_cls-0
-  - lsk150_pr-hiera_ex-sctm-1_cls-1
-  - lsk150_pr-hiera_ex-sctm-1_cls-25
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+#  - lsk150_pr-hiera_ex-sctm-1_cls-0
+#  - lsk150_pr-hiera_ex-sctm-1_cls-1
+#  - lsk150_pr-hiera_ex-sctm-1_cls-25
 #  - bcells_pr-scbs_ex-test-1_cls-100_1
 #  - bcells_pr-scbs_ex-test-1_cls-10_1
 #  - bcells_pr-scbs_ex-test-1_cls-1_1
@@ -74,15 +84,19 @@ genome_fa:
 # Output file paths
 # -----------------
 
-# [required]
-log_dir:
-  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/logs
+
 
 # If a results per entity directory is specified, relative result_paths are interpreted as relative to this directory
 # If not specified, relative result_paths will raise a ValueError
 # [required] if result_patterns are relative (the default), otherwise optional
-rpe_dir:
-  /icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity
+results_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/results
+
+results_prefix:
+  '{protocol}/results-per-entity/{entity}/{sample}/smk-wgbs/{config_name}_{workflow_version}'
+
+# [required]
+log_dir: logs
 
 # The result_patterns usually do not need to be edited, unless you want to overwrite the default
 # file structure created by the workflow. All paths must keep all required fields, of course.
@@ -92,37 +106,29 @@ result_patterns:
   # Turn into temporary or piped result?
   # basename must match basename of atomic_bam_unsorted, because bismark output name cannot be changed when using parallel processing
   trimmed_fastq:
-    '{entity}/{sample}/raw_data/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed.fastq.gz'
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed.fastq.gz'
 
   # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
   # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
-  bam_per_read:
-    '{entity}/{sample}/alignment/{entity}_{sample}_R{read_number}.bam'
-  mcalls_se_cytosines_per_motif:
-    '{entity}/{sample}/meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}.bed'
+  se_mcalls_cytosines_per_motif:
+    'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}.bed'
   se_bam:
-    '{entity}/{sample}/alignment/partial-alignments/SE_{entity}_{sample}.bam'
-  library_bam:
-    '{entity}/{sample}/alignment/partial-alignments/{entity}_{sample}_lib-{lib}.bam'
-  #  library_bam_per_read:
-  #    '{entity}/{sample}/alignment/partial-alignments/{entity}_{sample}_lib-{lib}_R{read_number}.bam'
+    'alignments/partial-alignments/SE_{entity}_{sample}.bam'
+  se_library_bam:
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}.bam'
   # to allow arbitrary uid tags without a uid keyword (uid_run-abc_lane-001 is not consistent),
   # lib may not contain underscorse
   # uid is composed of all other fields in metadata table
   # --basename to control name in bismark currently not compatible with multicore run
   # so we have to use the fastq stem (bismarks default)
-  atomic_bam_unsorted:
-    '{entity}/{sample}/alignment/partial-alignments/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_bismark_bt2.bam'
-  atomic_bam_sorted:
-    '{entity}/{sample}/alignment/partial-alignments/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}.bam'
-
-  # deprecated
-  #  bam_per_lane_read:
-  #    {entity}/{sample}/alignment/partial-alignments/lane-alignments/{run_id}/AS-{as_id}-LR-{lane_id}_R{read_number}.trimmed_bismark_bt2.bam
+  se_atomic_bam_unsorted:
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_bismark_bt2.bam'
+  se_atomic_bam_sorted:
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}.bam'
 
 
-#Else
-#----
+# Else
+# ========================================================================================
 
 # For chromosome categoricals and ordering
 chromosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",

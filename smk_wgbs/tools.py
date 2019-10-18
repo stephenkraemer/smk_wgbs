@@ -83,4 +83,6 @@ def get_snakefile_path() -> str:
 # def get_demo_config_dict() -> dict:
 #     return resource_filename
 
+def find_workflow_version():
+    return 'v0.1.0'
 

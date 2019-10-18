@@ -1,21 +1,4 @@
 """
-reference genome creation	20
-
-trimming	120
-
-chromosome length creation	20
-se alignment	20
-se duplicate removal	20
-sorting	20
-flagstats	20
-fastqc before trimming	20
-fastqc after trimming	10
-methylation calling with bismark	45
-reindex methylation calls	90
-save as pickle / parquet / hdf5	10
-7.25
-
-
 export PATH=/home/kraemers/projects/Bismark:$PATH
 
 snakemake \
@@ -26,26 +9,6 @@ snakemake \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --dryrun \
 
---forcerun methyldackel_se_CG_per_cytosine \
---forcerun trim_reads_pe \
-
-
-
---until bismark_se_local_alignment_per_lane \
---forcerun trim_reads_pe \
-
-
-
---forcerun bismark_se_merge_library_mdup \
---forcerun bismark_se_merge_libraries \
-
-
-
---forcerun bismark_se_local_alignment_per_lane \
-
-
-
-
 """
 
 import time
@@ -53,24 +16,27 @@ import re
 import os
 from pathlib import Path
 import pandas as pd
-from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand
+from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
 
 
 # For development
-# import yaml
-# config_yaml = '/home/kraemers/projects/smk_wgbs/doc/demo_config.yaml'
-# with open(config_yaml) as fin:
-#     config = yaml.load(fin, Loader=yaml.FullLoader)
+import yaml
+config_yaml = '/home/kraemers/projects/smk_wgbs/doc/demo_config.yaml'
+with open(config_yaml) as fin:
+    config = yaml.load(fin, Loader=yaml.FullLoader)
 
+# Fill prefix with config_name and workflow_version
+results_prefix = sel_expand(
+        config['results_prefix'],
+        config_name=config['name'],
+        workflow_version=find_workflow_version()
+)
 
-# convert relative to absolute paths
+# concatenate paths
+config['log_dir'] = os.path.join(config['results_dir'], results_prefix, config['log_dir'])
 for pattern_name, pattern in config['result_patterns'].items():
     config['result_patterns'][pattern_name] = (
-        pattern if os.path.isabs(pattern)
-        else os.path.join(config['rpe_dir'], pattern))
-
-# for pattern_name, pattern in config['result_patterns'].items():
-#     config['result_patterns'][pattern_name] = pattern.replace('{uid}', '_'.join(colname + '-{' + colname + '}' for colname in uid_columns))
+        os.path.join(config['results_dir'], results_prefix, pattern))
 
 # Prepare metadata table and adjust uid fields
 # ======================================================================
@@ -88,20 +54,28 @@ if 'fastq_pattern' in config:
             for entity in config['entities']], axis=0)
     else:
         raise NotImplementedError
+
+    # fill in optional pattern fields
     if 'lib' not in metadata_table:
         metadata_table['lib'] = '1'
+    if 'protocol' not in metadata_table:
+        metadata_table['protocol'] = config['protocol']
+
     metadata_table = metadata_table.astype(str)
     timestamp = time.strftime('%d-%m-%y_%H:%M:%S')
-    metadata_table.to_csv(
-            Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv'),
-            header=True, index=False, sep='\t')
+    metadata_table_tsv = Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv')
+    Path(metadata_table_tsv).parent.mkdir(parents=True, exist_ok=True)
+    metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
+
     # REMOVE
-    # metadata_table = metadata_table.iloc[0:2].copy()
+    metadata_table = metadata_table.iloc[0:2].copy()
     # \REMOVE
+
 else:
     metadata_table = pd.read_csv(config['metadata_table_tsv'], sep='\t', header=0, index=False)
+
 uid_columns = metadata_table.columns[
-    ~metadata_table.columns.isin(['entity', 'sample', 'read_number', 'path', 'lib'])]
+    ~metadata_table.columns.isin(['entity', 'sample', 'read_number', 'path', 'lib', 'protocol'])]
 
 # add read pair UID field to metadata table
 metadata_table['uid'] = metadata_table[uid_columns].apply(
@@ -113,15 +87,15 @@ metadata_table['uid'] = metadata_table[uid_columns].apply(
 wildcard_constraints:
     lib = '[^_]+'
 
-lane_alignments = []
+targets = []
 for _, row_ser in metadata_table.iterrows():
-    lane_alignments.append(sel_expand(config['result_patterns']['mcalls_se_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CpG'))
-    lane_alignments.append(sel_expand(config['result_patterns']['mcalls_se_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CHH'))
+    targets.append(sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CpG'))
+    targets.append(sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CHH'))
 
 
 rule all:
     input:
-         lane_alignments,
+         targets,
          # trimmed_fastq_files = trimmed_fastqs,
 
 # SE Alignment
@@ -153,8 +127,8 @@ rule bismark_se_local_alignment_per_lane:
          refconvert_CT = config['genome_dir'] + "/Bisulfite_Genome/CT_conversion/genome_mfa.CT_conversion.fa",
          refconvert_GA = config['genome_dir'] + "/Bisulfite_Genome/GA_conversion/genome_mfa.GA_conversion.fa",
     output:
-          bam = config['result_patterns']['atomic_bam_unsorted'],
-          report = config['result_patterns']['atomic_bam_unsorted'].replace('.bam', '_SE_report.txt'),
+          bam = config['result_patterns']['se_atomic_bam_unsorted'],
+          report = config['result_patterns']['se_atomic_bam_unsorted'].replace('.bam', '_SE_report.txt'),
     # non specified output files: will not be auto-removed
     params:
         genome_dir = config['genome_dir'],
@@ -166,7 +140,7 @@ rule bismark_se_local_alignment_per_lane:
         temp_dir = lambda wildcards, output: str(Path(output.bam).parent.joinpath('bismark_tempfiles')),
     threads: 6
     log:
-        config['log_dir'] + '/bismark_atomic-alignment_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
+        config['log_dir'] + '/bismark_atomic-alignment_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
     # basename and multicore together are not possible
     # --score_min G,10,2 \
     # --local
@@ -185,9 +159,9 @@ rule bismark_se_local_alignment_per_lane:
 
 rule bismark_se_sort_atomic_bam:
     input:
-         bam = config['result_patterns']['atomic_bam_unsorted'],
+         bam = config['result_patterns']['se_atomic_bam_unsorted'],
     output:
-          bam = config['result_patterns']['atomic_bam_sorted'],
+          bam = config['result_patterns']['se_atomic_bam_sorted'],
     params:
           # default -m: 768 Mb
           avg_mem = 8 * 1000,
@@ -201,14 +175,15 @@ rule bismark_se_sort_atomic_bam:
 def find_atomic_bams_for_library(wildcards):
     df = metadata_table
     matches_library_and_read = (
-            (df['entity'] == wildcards.entity)
+            (df['protocol'] == wildcards.protocol)
+            & (df['entity'] == wildcards.entity)
             & (df['sample'] == wildcards.sample)
             & (df['lib'] == wildcards.lib)
             # & (df['read_number'] == wildcards.read_number)
     )
     ser = (df
-           .loc[matches_library_and_read, ['entity', 'sample', 'lib', 'uid', 'read_number']]
-           .apply(lambda ser: expand(config['result_patterns']['atomic_bam_sorted'], **ser)[0],
+           .loc[matches_library_and_read, ['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
+           .apply(lambda ser: expand(config['result_patterns']['se_atomic_bam_sorted'], **ser)[0],
                   axis=1)
            )
     l = ser.to_list()
@@ -219,12 +194,12 @@ rule bismark_se_merge_library_mdup:
     input:
         find_atomic_bams_for_library
     output:
-         bam = config['result_patterns']['library_bam'],
-         bai = config['result_patterns']['library_bam'] + '.bai',
+         bam = config['result_patterns']['se_library_bam'],
+         bai = config['result_patterns']['se_library_bam'] + '.bai',
          metrics = re.sub(
                  '.bam$',
                  '_mdup-metrics.txt',
-                 config['result_patterns']['library_bam']),
+                 config['result_patterns']['se_library_bam']),
     params:
           # default -m: 768 Mb
           avg_mem = 8 * 1000,
@@ -251,14 +226,15 @@ rule bismark_se_merge_library_mdup:
 def find_library_bams(wildcards):
     df = metadata_table
     matches_library = (
-            (df['entity'] == wildcards.entity)
+            (df['protocol'] == wildcards.protocol)
+            & (df['entity'] == wildcards.entity)
             & (df['sample'] == wildcards.sample)
     )
     ser = (df
-           .loc[matches_library, ['entity', 'sample', 'lib']]
+           .loc[matches_library, ['protocol', 'entity', 'sample', 'lib']]
            .drop_duplicates()
             # expand always returns list, get string out of list of length 1
-           .apply(lambda ser: expand(config['result_patterns']['library_bam'], **ser)[0],
+           .apply(lambda ser: expand(config['result_patterns']['se_library_bam'], **ser)[0],
                   axis=1)
            )
     l = ser.to_list()
@@ -306,9 +282,9 @@ rule methyldackel_se_CG_per_cytosine:
          bam = config['result_patterns']['se_bam'],
          ref_genome_unconverted = ancient(config['genome_fa']),
     output:
-        bedgraph = str(Path(config['result_patterns']['mcalls_se_cytosines_per_motif']).with_suffix('.bedGraph')),
-        bed = config['result_patterns']['mcalls_se_cytosines_per_motif'],
-        parquet = str(Path(config['result_patterns']['mcalls_se_cytosines_per_motif']).with_suffix('.parquet')),
+        bedgraph = str(Path(config['result_patterns']['se_mcalls_cytosines_per_motif']).with_suffix('.bedGraph')),
+        bed = config['result_patterns']['se_mcalls_cytosines_per_motif'],
+        parquet = str(Path(config['result_patterns']['se_mcalls_cytosines_per_motif']).with_suffix('.parquet')),
     params:
           avg_mem = 6000,
           max_mem = 10000,
@@ -321,7 +297,7 @@ rule methyldackel_se_CG_per_cytosine:
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
-       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:_{entity}_{sample}_{motif}.log'
+       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}_{motif}.log'
     run:
         import subprocess
         import pandas as pd
@@ -390,8 +366,6 @@ rule bismark_genome_preparation:
         name = 'ref_conversion',
         walltime = '08:00',
     threads: 64
-    log:
-       config['log_dir'] + '/bismark_genome_preparation.log'
     # message: "Converting Genome into Bisulfite analogue"
     shell:
          """
@@ -412,10 +386,13 @@ rule bismark_genome_preparation:
 # parallelization requires pigz python package to be installed (by default if bismark is installed via conda)
 def find_fastqs(wildcards):
     df = metadata_table
-    is_in_selected_pair = ((df['entity'] == wildcards.entity)
-                           & (df['sample'] == wildcards.sample)
-                           & (df['lib'] == wildcards.lib)
-                           & (df['uid'] == wildcards.uid))
+    is_in_selected_pair = (
+            (df['protocol'] == wildcards.protocol)
+            & (df['entity'] == wildcards.entity)
+            & (df['sample'] == wildcards.sample)
+            & (df['lib'] == wildcards.lib)
+            & (df['uid'] == wildcards.uid)
+    )
     fastq_r1_ser = df.loc[is_in_selected_pair & (df['read_number'] == '1'), 'path']
     assert fastq_r1_ser.shape[0] == 1
     fastq_r2_ser = df.loc[is_in_selected_pair & (df['read_number'] == '2'), 'path']
@@ -429,7 +406,7 @@ rule trim_reads_pe:
           fq_r1 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='1'),
           fq_r2 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='2'),
     log:
-       config['log_dir'] + '/cutadapt_{entity}_{sample}_{uid}_{lib}.log'
+       config['log_dir'] + '/cutadapt_{protocol}_{entity}_{sample}_{uid}_{lib}.log'
     # message:
     #        "Trimming raw paired-end read data\n{input.fq_r1}\n{input.fq_r2}"
     params:
