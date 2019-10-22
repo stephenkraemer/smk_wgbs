@@ -25,11 +25,21 @@ fastq_pattern:
 
 protocol: scnmt
 
-protocol_flags:
+protocol_config:
   scnmt:
     is_nome_seq: True
+    motifs:
+      CHH: 'full'
+      CHG: 'full'
+      CG: 'full'
   sctm:
     is_nome_seq: False
+    motifs:
+      CHH: 'sampled'
+      CHG: False
+      CG: True
+
+
 
 # a list of entity names can be used to restrict the analysis to the specified samples
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
@@ -111,7 +121,7 @@ result_patterns:
   # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
   # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
   se_mcalls_cytosines_per_motif:
-    'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}.bed'
+    'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}{region}.bed'
   se_bam:
     'alignments/partial-alignments/SE_{entity}_{sample}.bam'
   se_library_bam:

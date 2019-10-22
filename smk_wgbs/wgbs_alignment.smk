@@ -5,25 +5,32 @@ snakemake \
 --snakefile /home/kraemers/projects/smk_wgbs/smk_wgbs/wgbs_alignment.smk \
 --latency-wait 120 \
 --configfile /home/kraemers/projects/smk_wgbs/doc/demo_config.yaml \
---jobs 1000 \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
+--jobs 1000 \
+
 --dryrun \
 
+
+--forcerun bismark_se_local_alignment_per_lane \
 """
 
 import time
 import re
+import shutil
 import os
 from pathlib import Path
 import pandas as pd
+import subprocess
+import pandas as pd
+from pandas.api.types import CategoricalDtype
 from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
 
 
 # For development
-import yaml
-config_yaml = '/home/kraemers/projects/smk_wgbs/doc/demo_config.yaml'
-with open(config_yaml) as fin:
-    config = yaml.load(fin, Loader=yaml.FullLoader)
+# import yaml
+# config_yaml = '/home/kraemers/projects/smk_wgbs/doc/demo_config.yaml'
+# with open(config_yaml) as fin:
+#     config = yaml.load(fin, Loader=yaml.FullLoader)
 
 # Fill prefix with config_name and workflow_version
 results_prefix = sel_expand(
@@ -62,13 +69,14 @@ if 'fastq_pattern' in config:
         metadata_table['protocol'] = config['protocol']
 
     metadata_table = metadata_table.astype(str)
+
     timestamp = time.strftime('%d-%m-%y_%H:%M:%S')
     metadata_table_tsv = Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv')
     Path(metadata_table_tsv).parent.mkdir(parents=True, exist_ok=True)
     metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
 
     # REMOVE
-    metadata_table = metadata_table.iloc[0:2].copy()
+    metadata_table = metadata_table.iloc[0:10].copy()
     # \REMOVE
 
 else:
@@ -85,12 +93,38 @@ metadata_table['uid'] = metadata_table[uid_columns].apply(
 # Targets
 # ======================================================================
 wildcard_constraints:
-    lib = '[^_]+'
+    lib = '[^_]+',
+    motif = '(CG|CHG|CHH)',
+    region = '.*',
+
+
+is_nome = (config['protocol_config'][config['protocol']].get('is_nome_seq', False))
+if is_nome:
+    for motif, user_request in config['protocol_config'][config['protocol']]['motifs'].items():
+        if not user_request:
+            raise ValueError(f'NOMe-Seq requires calls for all motifs, but motif {motif} is turned off')
+        elif user_request == 'sampled':
+            print(f'WARNING: NOMe seq, but {motif} is set to "sampled"')
+
+sampling_name = '1:40e-80e'
 
 targets = []
 for _, row_ser in metadata_table.iterrows():
-    targets.append(sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CpG'))
-    targets.append(sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'].replace('.bed', '.bedGraph'), **row_ser, motif='CHH'))
+    for motif, user_request in config['protocol_config'][config['protocol']]['motifs'].items():
+        if not user_request:
+            continue
+        elif user_request == 'sampled':
+            region = f'_sampled-{sampling_name}'
+        elif user_request == 'full':
+            region = ''
+        else:
+            raise ValueError()
+        targets.append(sel_expand(
+                config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                **row_ser,
+                motif=motif,
+                region=region,
+        ))
 
 
 rule all:
@@ -128,16 +162,15 @@ rule bismark_se_local_alignment_per_lane:
          refconvert_GA = config['genome_dir'] + "/Bisulfite_Genome/GA_conversion/genome_mfa.GA_conversion.fa",
     output:
           bam = config['result_patterns']['se_atomic_bam_unsorted'],
-          report = config['result_patterns']['se_atomic_bam_unsorted'].replace('.bam', '_SE_report.txt'),
+          bismark_report = config['result_patterns']['se_atomic_bam_unsorted'].replace('.bam', '_SE_report.txt'),
+          temp_dir = temp(directory(config['result_patterns']['se_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
     params:
         genome_dir = config['genome_dir'],
         avg_mem = 12000,
         max_mem = 16000,
         name = 'bismark_alignment_{entity}_{sample}',
-        walltime = '12:00',
-        output_dir = lambda wildcards, output: str(Path(output.bam).parent),
-        temp_dir = lambda wildcards, output: str(Path(output.bam).parent.joinpath('bismark_tempfiles')),
+        walltime = '08:00',
     threads: 6
     log:
         config['log_dir'] + '/bismark_atomic-alignment_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
@@ -145,17 +178,41 @@ rule bismark_se_local_alignment_per_lane:
     # --score_min G,10,2 \
     # --local
     # --parallel 4 \
-    shell:
-        """
-        bismark \
-        --single_end {input.fq} \
-        --non_directional \
-        --local \
-        --output_dir {params.output_dir} \
-        --temp_dir {params.temp_dir}\
-        {params.genome_dir} \
-        > {log} 2>&1
-        """
+    run:
+        # temp_dir
+        # - need different temp_dir per atomic alignment
+        # - rule removes the atomic temp_dir at the end of the rule using the temp()
+        # directive. This is more robust than removing the directory inside the rule
+        # (in case of crashed jobs)
+        # - if bismark changes its behavior to completely remove the temp_dir at the end
+        # of its run, this rule will fail, because the temp_dir is an expected (temp) output
+        from pathlib import Path
+        import re
+
+        output_dir = Path(output.bam).parent
+        shell(
+           """
+           bismark \
+           --single_end {input.fq} \
+           --non_directional \
+           --local \
+           --output_dir {output_dir} \
+           --temp_dir {output.temp_dir}\
+           {params.genome_dir} \
+           > {log} 2>&1
+           """
+        )
+
+        # obtain paths where bismark will place files
+        # bismark hardcodes output files basenames
+        # (--basename cannot be used together with multithreading atm)
+        stem = re.sub('.fastq(.gz)?$', '', Path(input.fq).name)
+        bismark_bam_fp = output_dir.joinpath(stem + '_bismark_bt2.bam')
+        bismark_se_report_fp = output_dir.joinpath(stem + '_bismark_bt2_SE_report.txt')
+        # Move results from hard coded paths to user-specified paths
+        bismark_bam_fp.rename(output.bam)
+        bismark_se_report_fp.rename(output.bismark_report)
+
 
 rule bismark_se_sort_atomic_bam:
     input:
@@ -268,48 +325,52 @@ rule bismark_se_merge_libraries:
 # ==============================================================================
 
 def get_motif_params_str(wildcards):
-    if wildcards.motif == 'CpG':
+    chromosome1_name = config['chromosomes'][0]
+    if wildcards.region:
+        sample_command = f'-r {chromosome1_name}:40000000-100000000'
+    else:
+        sample_command = ''
+    if wildcards.motif == 'CG':
         return ''
     elif wildcards.motif == 'CHH':
-        chromosome1_name = config['chromosomes'][0]
-        return f'--CHH --noCpG -r {chromosome1_name}:40000000-100000000'
+        return f'--CHH --noCpG {sample_command}'
+    elif wildcards.motif == 'CHH':
+        return f'--CHG --noCpG {sample_command}'
     else:
         raise ValueError()
 
+def get_methyldackel_walltime(wildcards):
+    if wildcards.region:
+        sampled_str = 'sampled'
+    else:
+        sampled_str = 'full'
+    walltime_d = {
+        'CHH': {
+            'sampled': '02:00',
+            'full': '10:00',
+        },
+        'CHG': {
+            'sampled': '02:00',
+            'full': '10:00',
+        },
+        'CG': {
+            'sampled': '01:00',
+            'full': '02:00',
+        },
+    }
+    return walltime_d[wildcards.motif][sampled_str]
 
-rule methyldackel_se_CG_per_cytosine:
-    input:
-         bam = config['result_patterns']['se_bam'],
-         ref_genome_unconverted = ancient(config['genome_fa']),
-    output:
-        bedgraph = str(Path(config['result_patterns']['se_mcalls_cytosines_per_motif']).with_suffix('.bedGraph')),
-        bed = config['result_patterns']['se_mcalls_cytosines_per_motif'],
-        parquet = str(Path(config['result_patterns']['se_mcalls_cytosines_per_motif']).with_suffix('.parquet')),
-    params:
-          avg_mem = 6000,
-          max_mem = 10000,
-          name = 'methyldackel_se_{motif}_per_cytosine_{entity}_{sample}',
-          walltime = '02:00',
-          prefix = lambda wildcards, output: output.bedgraph.replace(f'_{wildcards.motif}.bedGraph', ''),
-          # TODO: is config directly available in rule?
-          chromosomes = config['chromosomes'],
-          motif_params = get_motif_params_str,
-    # TODO: defaults for maxVariantFrac and minOppositeDepth
-    threads: 4
-    log:
-       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}_{motif}.log'
-    run:
-        import subprocess
-        import pandas as pd
-        from pandas.api.types import CategoricalDtype
 
-        print('Running MethylDackel')
-        subprocess.run(
+def run_methyldackel(input, output, params, threads):
+
+    print('Running MethylDackel')
+    subprocess.run(
             f"""
             MethylDackel extract \
             --ignoreFlags 3840 \
             --requireFlags 0 \
             {params.motif_params} \
+            {params.sampling_options} \
             -o {params.prefix} \
             -q 15 \
             -p 15 \
@@ -317,13 +378,19 @@ rule methyldackel_se_CG_per_cytosine:
             {input.ref_genome_unconverted} \
             {input.bam}
             """.split()
-        )
-        print('Done with MethylDackel')
-        # NOTE: parquet does not retain the categorical dtype atm
+    )
+    print('Done with MethylDackel')
+
+    chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
+
+    assert len(output) % 4 == 0
+    for i in range(int(len(output) / 4)):
+        bed, bedgraph, parquet, tmp_bedgraph  = output[4*i:(4*i)+4]
+        # convert bedgraph to bed and parquet
+        shutil.copy(tmp_bedgraph, bedgraph)
         print('Create parquet and BED file')
-        chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
         df = pd.read_csv(
-                output.bedgraph,
+                bedgraph,
                 # '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/hsc_pr-scbs_ex-test-1_cls-10_1/blood/meth-calls/partial-meth-calls/SE_hsc_pr-scbs_ex-test-1_cls-10_1_blood_per-cytosine_CpG.bedGraph',
                 sep='\t',
                 skiprows=1,
@@ -334,11 +401,126 @@ rule methyldackel_se_CG_per_cytosine:
         df = df.dropna(subset=['#Chromosome'])
         df['n_total'] = df.eval('n_meth + n_unmeth')
         df['beta_value'] = df.eval('n_meth / n_total')
-        df = df[['#Chromosome', 'Start', 'End', 'beta_value', 'n_total', 'n_meth']]
+        # Add motif column
+        # TODO: improve
+        if 'CpG' in bed:
+            motif = 'CG'
+        elif 'CHG' in bed:
+            motif  = 'CHG'
+        elif 'CHH' in bed:
+            motif = 'CHH'
+        else:
+            motif = 'NA'
+        df['motif'] = motif
 
-        df.to_csv(output.bed, sep='\t', header=True, index=False)
-        df.rename(columns={'#Chromosome': 'Chromosome'}).to_parquet(output.parquet)
+        # Final column order
+        df = df[['#Chromosome', 'Start', 'End', 'motif', 'beta_value', 'n_total', 'n_meth']]
+
+        # Save to BED and parquet
+        df.to_csv(bed, sep='\t', header=True, index=False)
+        df.rename(columns={'#Chromosome': 'Chromosome'}).to_parquet(parquet)
         print('done')
+        # else: continue
+
+methyldackel_input = dict(
+    bam = config['result_patterns']['se_bam'],
+    ref_genome_unconverted = ancient(config['genome_fa']),
+)
+
+# rule for full runs
+def get_methyldackel_output_params(
+        cg_walltime,
+        chh_walltime,
+        sampling_name,
+        calling_mode
+):
+    methyldackel_output = []
+    motif_params_l = ['--noCpG']
+    methyldackel_walltime = cg_walltime
+    for motif, motif_calling_mode in config['protocol_config'][config['protocol']]['motifs'].items():
+        if motif_calling_mode == calling_mode:
+            if motif == 'CG':
+                motif_params_l.remove('--noCpG')
+            else:  # CHH or CHG
+                assert motif in ['CHH', 'CHG']
+                motif_params_l.append(f'--{motif}')
+                methyldackel_walltime = chh_walltime  # walltime for full run including CHH and/or CHG
+            bed = Path(sel_expand(
+                    config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                    motif=motif,
+                    region=f'_sampled-{sampling_name}' if sampling_name else '',
+            ))
+            methyldackel_motif = motif if motif != 'CG' else 'CpG'
+            methyldackel_output += [
+                bed,
+                bed.with_suffix('.bedGraph'),
+                bed.with_suffix('.parquet'),
+                temp(bed.parent.joinpath('SE_{entity}_{sample}' + f'_{methyldackel_motif}.bedGraph')),
+            ]
+    motif_params_str = ' '.join(motif_params_l)
+    if not methyldackel_output:
+        methyldackel_output = [sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                               motif='UNUSED',
+                               region='UNUSED')]
+    return methyldackel_output, methyldackel_walltime, motif_params_str
+
+methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_output_params(
+        cg_walltime='02:00',
+        chh_walltime='10:00',
+        sampling_name='',
+        calling_mode='full'
+)
+rule methyldackel_se_CG_per_cytosine:
+    input:
+          **methyldackel_input,
+    output:
+          methyldackel_output,
+    params:
+          avg_mem = 6000,
+          max_mem = 10000,
+          name = 'methyldackel_se_per_cytosine_{entity}_{sample}',
+          walltime = methyldackel_walltime,
+          prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
+                  f'SE_{wildcards.entity}_{wildcards.sample}'),
+          # TODO: is config directly available in rule?
+          chromosomes = config['chromosomes'],
+          motif_params = motif_params_str,
+          sampling_options = '',
+    # TODO: defaults for maxVariantFrac and minOppositeDepth
+    threads: 4
+    log:
+       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}.log'
+    run:
+        run_methyldackel(input, output, params, threads)
+
+methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_output_params(
+        cg_walltime='00:30',
+        chh_walltime='02:00',
+        sampling_name=sampling_name,
+        calling_mode='sampled')
+
+rule methyldackel_se_CG_per_cytosine_sampled:
+    input:
+         **methyldackel_input,
+    output:
+          methyldackel_output,
+    params:
+          avg_mem = 6000,
+          max_mem = 10000,
+          name = 'methyldackel_se_per_cytosine_{entity}_{sample}' + sampling_name,
+          walltime = methyldackel_walltime,
+          prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
+                  f'SE_{wildcards.entity}_{wildcards.sample}'),
+          # TODO: is config directly available in rule?
+          chromosomes = config['chromosomes'],
+          motif_params = motif_params_str,
+          sampling_options = '-r 1:40000000-100000000',
+    # TODO: defaults for maxVariantFrac and minOppositeDepth
+    threads: 4
+    log:
+       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}.log'
+    run:
+        run_methyldackel(input, output, params, threads)
 
 
 
