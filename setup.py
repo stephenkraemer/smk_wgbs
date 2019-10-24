@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-        name='scwgbs_alignment',
+        name='smk_wgbs',
         version='0.1',
         author='Stephen Kraemer',
         author_email='stephenkraemer@gmail.com',

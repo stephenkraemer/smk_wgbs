@@ -46,9 +46,9 @@ protocol_config:
 # [optional]
 entities:
   - lsk150_pr-hiera_ex-scnmt-1_cls-1
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-0
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+  - lsk150_pr-hiera_ex-scnmt-1_cls-25
 #  - lsk150_pr-hiera_ex-sctm-1_cls-0
 #  - lsk150_pr-hiera_ex-sctm-1_cls-1
 #  - lsk150_pr-hiera_ex-sctm-1_cls-25
@@ -135,12 +135,25 @@ result_patterns:
     'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_bismark_bt2.bam'
   se_atomic_bam_sorted:
     'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}.bam'
+  cg_full_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CG-full{region}.parquet'
+  cg_meth_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CG-meth{region}.parquet'
+  ch_full_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CH-full{region}.parquet'
+  ch_acc_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CH-acc{region}.parquet'
+  chg_meth_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CHG-meth{region}.parquet'
+  chh_meth_parquet:
+    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CHH-meth{region}.parquet'
 
 
 # Else
 # ========================================================================================
 
 # For chromosome categoricals and ordering
+# these must be in the desired sorting order
 chromosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",
               "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
               "X", "Y", "MT", "phix", "L"]

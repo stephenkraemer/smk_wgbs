@@ -7,11 +7,14 @@ snakemake \
 --configfile /home/kraemers/projects/smk_wgbs/doc/demo_config.yaml \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
-
+--keep-going \
+--rerun-incomplete \
+--forcerun trim_reads_pe \
 --dryrun \
 
 
 --forcerun bismark_se_local_alignment_per_lane \
+--forcerun nome_filtering \
 """
 
 import time
@@ -24,6 +27,8 @@ import subprocess
 import pandas as pd
 from pandas.api.types import CategoricalDtype
 from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
+from smk_wgbs.tools import fp_to_parquet
+import smk_wgbs.tools
 
 
 # For development
@@ -76,7 +81,9 @@ if 'fastq_pattern' in config:
     metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
 
     # REMOVE
-    metadata_table = metadata_table.iloc[0:10].copy()
+    # metadata_table = metadata_table.iloc[0:10].copy()
+    samples = ['blood41', 'blood48', 'blood79', 'blood12', 'blood22', 'blood65', 'blood59', 'blood63', 'blood35', 'blood30', 'blood80', 'blood49', 'blood78', 'blood28', 'blood76', 'blood32', 'blood72', 'blood73', 'blood91', 'blood40', 'blood90', 'blood9', 'blood74', 'blood71', 'blood57', 'blood75', 'blood87', 'blood18', 'blood56', 'blood68', 'blood10', 'blood70', 'blood84', 'blood62', 'blood26', 'blood42', 'blood85', 'blood89', 'blood29', 'blood50', 'blood45', 'blood60', 'blood83', 'bloodmethneg1']
+    metadata_table = metadata_table.query('sample in @samples')
     # \REMOVE
 
 else:
@@ -119,8 +126,12 @@ for _, row_ser in metadata_table.iterrows():
             region = ''
         else:
             raise ValueError()
+        if config['protocol_config'][config['protocol']].get('is_nome_seq', False):
+            pattern = config['result_patterns']['cg_full_parquet']
+        else:
+            pattern = config['result_patterns']['se_mcalls_cytosines_per_motif']
         targets.append(sel_expand(
-                config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                pattern,
                 **row_ser,
                 motif=motif,
                 region=region,
@@ -171,6 +182,7 @@ rule bismark_se_local_alignment_per_lane:
         max_mem = 16000,
         name = 'bismark_alignment_{entity}_{sample}',
         walltime = '08:00',
+        # walltime = '00:30',
     threads: 6
     log:
         config['log_dir'] + '/bismark_atomic-alignment_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
@@ -621,3 +633,41 @@ rule trim_reads_pe:
          {input.fq_r2} \
          > {log} 2>&1
          """
+
+
+input_d = {}
+for motif, calling_mode in config['protocol_config'][config['protocol']]['motifs'].items():
+    if calling_mode == 'full':
+        region = ''
+    else:
+        region = sampling_name
+    input_d[motif] = fp_to_parquet(
+            sel_expand(
+                    config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                    motif=motif,
+                    region=region
+            )
+    )
+
+
+RESPAT = config['result_patterns']
+rule nome_filtering:
+    input:
+         **input_d
+    output:
+          cg_full_parquet = RESPAT['cg_full_parquet'],
+          cg_meth_parquet = RESPAT['cg_meth_parquet'],
+          ch_full_parquet = RESPAT['ch_full_parquet'],
+          ch_acc_parquet = RESPAT['ch_acc_parquet'],
+          chg_meth_parquet = RESPAT['chg_meth_parquet'],
+          chh_meth_parquet = RESPAT['chh_meth_parquet'],
+    params:
+          avg_mem = 60000,
+          max_mem = 80000,
+          walltime = '04:00',
+          name = 'nome_filtering_{entity}_{sample}',
+          chromosomes = config['chromosomes'],
+    log:
+       config['log_dir'] + '/nome-filtering_{protocol}_{entity}_{sample}{region}.log'
+    run:
+        smk_wgbs.tools.nome_filtering(input, output, params)
