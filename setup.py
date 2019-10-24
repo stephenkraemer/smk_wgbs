@@ -8,8 +8,14 @@ setup(
         license='MIT',
         packages=['smk_wgbs'],
         package_data={
-            '': ['*.R', '*.snakefile', '*.yml', '*.yaml', '*.sh'],
+            '': ['*.R', '*.snakefile', '*.yml', '*.yaml', '*.sh', '*.smk', '*.rules'],
         },
-        install_requires=[],
+        entry_points={
+            'console_scripts': [
+                'smk_wgbs_snakefile = smk_wgbs.tools:print_snakefile_fp',
+                'smk_wgbs_demo_config = smk_wgbs.tools:print_demo_config_fp',
+            ]
+},
+install_requires=[],
         python_requires='>=3.6',
 )

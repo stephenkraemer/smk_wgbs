@@ -95,12 +95,18 @@ def create_metadata_table_from_file_pattern(
     return metadata_df
 
 
-def get_snakefile_path() -> str:
-    return resource_filename("smk_wgbs", "smk_wgbs.smk")
+def get_snakefile_fp() -> str:
+    return resource_filename("smk_wgbs", "wgbs_alignment.smk")
+
+def print_snakefile_fp():
+    print(get_snakefile_fp())
 
 
-# def get_demo_config_dict() -> dict:
-#     return resource_filename
+def get_demo_config_fp():
+    return resource_filename("smk_wgbs", "demo_config.yaml")
+
+def print_demo_config_fp():
+    print(get_demo_config_fp())
 
 
 def find_workflow_version():

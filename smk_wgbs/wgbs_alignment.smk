@@ -2,17 +2,18 @@
 export PATH=/home/kraemers/projects/Bismark:$PATH
 
 snakemake \
---snakefile /home/kraemers/projects/smk_wgbs/smk_wgbs/wgbs_alignment.smk \
+--snakefile $(smk_wgbs_snakefile) \
 --latency-wait 120 \
---configfile /home/kraemers/projects/smk_wgbs/doc/demo_config.yaml \
+--configfile $(smk_wgbs_demo_config) \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
 --keep-going \
---rerun-incomplete \
---forcerun trim_reads_pe \
+
 --dryrun \
 
 
+--rerun-incomplete \
+--forcerun trim_reads_pe \
 --forcerun bismark_se_local_alignment_per_lane \
 --forcerun nome_filtering \
 """
