@@ -45,37 +45,37 @@ protocol_config:
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1
-  - lsk150_pr-hiera_ex-scnmt-1_cls-0
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
-  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-1
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-25
 #  - lsk150_pr-hiera_ex-sctm-1_cls-0
 #  - lsk150_pr-hiera_ex-sctm-1_cls-1
 #  - lsk150_pr-hiera_ex-sctm-1_cls-25
-#  - bcells_pr-scbs_ex-test-1_cls-100_1
-#  - bcells_pr-scbs_ex-test-1_cls-10_1
-#  - bcells_pr-scbs_ex-test-1_cls-1_1
-#  - bcells_pr-scbs_ex-test-1_cls-1_2
-#  - bcells_pr-scbs_ex-test-1_cls-1_3
-#  - bcells_pr-scbs_ex-test-1_cls-1_4
-#  - bcells_pr-scbs_ex-test-1_cls-1_5
-#  - bcells_pr-scbs_ex-test-1_cls-1_6
-#  - ctr_pr-scbs_ex-test-1_cls-0_1
-#  - hsc_pr-scbs_ex-test-1_cls-10_1
-#  - hsc_pr-scbs_ex-test-1_cls-1_1
-#  - hsc_pr-scbs_ex-test-1_cls-1_2
-#  - hsc_pr-scbs_ex-test-1_cls-1_3
-#  - hsc_pr-scbs_ex-test-1_cls-1_4
-#  - hsc_pr-scbs_ex-test-1_cls-1_5
-#  - hsc_pr-scbs_ex-test-1_cls-1_6
-#  - hsc_pr-scbs_ex-test-1_cls-1_7
-#  - hsc_pr-scbs_ex-test-1_cls-1_8
-#  - monos_pr-scbs_ex-test-1_cls-10_1
-#  - monos_pr-scbs_ex-test-1_cls-1_1
-#  - monos_pr-scbs_ex-test-1_cls-1_2
-#  - monos_pr-scbs_ex-test-1_cls-1_3
-#  - monos_pr-scbs_ex-test-1_cls-1_4
-#  - monos_pr-scbs_ex-test-1_cls-1_5
+  - bcells_pr-scbs_ex-test-1_cls-100_1
+  - bcells_pr-scbs_ex-test-1_cls-10_1
+  - bcells_pr-scbs_ex-test-1_cls-1_1
+  - bcells_pr-scbs_ex-test-1_cls-1_2
+  - bcells_pr-scbs_ex-test-1_cls-1_3
+  - bcells_pr-scbs_ex-test-1_cls-1_4
+  - bcells_pr-scbs_ex-test-1_cls-1_5
+  - bcells_pr-scbs_ex-test-1_cls-1_6
+  - ctr_pr-scbs_ex-test-1_cls-0_1
+  - hsc_pr-scbs_ex-test-1_cls-10_1
+  - hsc_pr-scbs_ex-test-1_cls-1_1
+  - hsc_pr-scbs_ex-test-1_cls-1_2
+  - hsc_pr-scbs_ex-test-1_cls-1_3
+  - hsc_pr-scbs_ex-test-1_cls-1_4
+  - hsc_pr-scbs_ex-test-1_cls-1_5
+  - hsc_pr-scbs_ex-test-1_cls-1_6
+  - hsc_pr-scbs_ex-test-1_cls-1_7
+  - hsc_pr-scbs_ex-test-1_cls-1_8
+  - monos_pr-scbs_ex-test-1_cls-10_1
+  - monos_pr-scbs_ex-test-1_cls-1_1
+  - monos_pr-scbs_ex-test-1_cls-1_2
+  - monos_pr-scbs_ex-test-1_cls-1_3
+  - monos_pr-scbs_ex-test-1_cls-1_4
+  - monos_pr-scbs_ex-test-1_cls-1_5
 
 
 # Other input paths

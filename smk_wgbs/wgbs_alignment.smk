@@ -7,13 +7,12 @@ snakemake \
 --configfile $(smk_wgbs_demo_config) \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
+--forcerun trim_reads_pe \
 --keep-going \
-
 --dryrun \
 
 
 --rerun-incomplete \
---forcerun trim_reads_pe \
 --forcerun bismark_se_local_alignment_per_lane \
 --forcerun nome_filtering \
 """
@@ -83,8 +82,6 @@ if 'fastq_pattern' in config:
 
     # REMOVE
     # metadata_table = metadata_table.iloc[0:10].copy()
-    samples = ['blood41', 'blood48', 'blood79', 'blood12', 'blood22', 'blood65', 'blood59', 'blood63', 'blood35', 'blood30', 'blood80', 'blood49', 'blood78', 'blood28', 'blood76', 'blood32', 'blood72', 'blood73', 'blood91', 'blood40', 'blood90', 'blood9', 'blood74', 'blood71', 'blood57', 'blood75', 'blood87', 'blood18', 'blood56', 'blood68', 'blood10', 'blood70', 'blood84', 'blood62', 'blood26', 'blood42', 'blood85', 'blood89', 'blood29', 'blood50', 'blood45', 'blood60', 'blood83', 'bloodmethneg1']
-    metadata_table = metadata_table.query('sample in @samples')
     # \REMOVE
 
 else:
