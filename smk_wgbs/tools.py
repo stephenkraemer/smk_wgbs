@@ -2,7 +2,11 @@ import itertools
 import os
 import re
 import glob
+import shutil
+import subprocess
 from pathlib import Path
+
+from pandas import CategoricalDtype
 from pkg_resources import resource_filename
 import pandas as pd
 import itertools
@@ -115,6 +119,9 @@ def find_workflow_version():
 
 def fp_to_parquet(fp, suffix="bed"):
     return re.sub(f".{suffix}$", ".parquet", fp)
+
+def fp_to_bedgraph(fp, suffix='bed'):
+    return re.sub(f".{suffix}$", ".bedGraph", fp)
 
 
 index_pattern_cg = "/icgc/dkfzlsdf/analysis/B080/kraemers/projects/mcall_qc/sandbox/genomes/GRCm38mm10_PhiX_Lambda/GRCm38mm10_PhiX_Lambda_CG-nome_{chromosome}.bed.gz"
@@ -270,3 +277,65 @@ def nome_filtering(input, output, params):
 
     chh_meth_df = ch_meth_df.query('motif == "CHH"')
     chh_meth_df.to_parquet(output.chh_meth_parquet)
+
+
+def run_methyldackel(input, output, params, threads):
+
+    print('Running MethylDackel')
+    subprocess.run(
+            f"""
+            MethylDackel extract \
+            --ignoreFlags 3840 \
+            --requireFlags 0 \
+            {params.motif_params} \
+            {params.sampling_options} \
+            -o {params.prefix} \
+            -q 15 \
+            -p 15 \
+            -@ {threads} \
+            {input.ref_genome_unconverted} \
+            {input.bam}
+            """.split()
+    )
+    print('Done with MethylDackel')
+
+    chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
+
+    assert len(output) % 4 == 0
+    for i in range(int(len(output) / 4)):
+        bed, bedgraph, parquet, tmp_bedgraph  = output[4*i:(4*i)+4]
+        # convert bedgraph to bed and parquet
+        shutil.copy(tmp_bedgraph, bedgraph)
+        methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet)
+
+
+def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet):
+    print('Create parquet and BED file')
+    df = pd.read_csv(
+            bedgraph,
+            sep='\t',
+            skiprows=1,
+            names=['#Chromosome', 'Start', 'End', 'beta_value', 'n_meth', 'n_unmeth'],
+            dtype={'#Chromosome': chrom_dtype}
+    )
+    # Discard unwanted chromosomes/or more commonly: contigs (not in config['chromosomes'])
+    df = df.dropna(subset=['#Chromosome'])
+    df['n_total'] = df.eval('n_meth + n_unmeth')
+    df['beta_value'] = df.eval('n_meth / n_total')
+    # Add motif column
+    # TODO: improve
+    if 'CpG' in bed:
+        motif = 'CG'
+    elif 'CHG' in bed:
+        motif = 'CHG'
+    elif 'CHH' in bed:
+        motif = 'CHH'
+    else:
+        motif = 'NA'
+    df['motif'] = motif
+    # Final column order
+    df = df[['#Chromosome', 'Start', 'End', 'motif', 'beta_value', 'n_total', 'n_meth']]
+    # Save to BED and parquet
+    df.to_csv(bed, sep='\t', header=True, index=False)
+    df.rename(columns={'#Chromosome': 'Chromosome'}).to_parquet(parquet)
+    print('done')

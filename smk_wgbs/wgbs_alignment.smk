@@ -5,29 +5,26 @@ snakemake \
 --snakefile $(smk_wgbs_snakefile) \
 --latency-wait 120 \
 --configfile $(smk_wgbs_demo_config) \
+--forcerun methyldackel_merge_context \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
---forcerun trim_reads_pe \
 --keep-going \
 --dryrun \
 
 
+
 --rerun-incomplete \
+--forcerun trim_reads_pe \
 --forcerun bismark_se_local_alignment_per_lane \
 --forcerun nome_filtering \
 """
 
 import time
-import re
-import shutil
 import os
 from pathlib import Path
 import pandas as pd
-import subprocess
-import pandas as pd
-from pandas.api.types import CategoricalDtype
 from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
-from smk_wgbs.tools import fp_to_parquet
+from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet
 import smk_wgbs.tools
 
 
@@ -127,7 +124,12 @@ for _, row_ser in metadata_table.iterrows():
         if config['protocol_config'][config['protocol']].get('is_nome_seq', False):
             pattern = config['result_patterns']['cg_full_parquet']
         else:
-            pattern = config['result_patterns']['se_mcalls_cytosines_per_motif']
+            if motif == 'CHH':
+                pattern = config['result_patterns']['se_mcalls_cytosines_per_motif']
+            elif motif in ['CG', 'CHG']:
+                pattern = config['result_patterns']['se_mcalls_merged_per_motif']
+            else:
+                ValueError()
         targets.append(sel_expand(
                 pattern,
                 **row_ser,
@@ -371,67 +373,6 @@ def get_methyldackel_walltime(wildcards):
     return walltime_d[wildcards.motif][sampled_str]
 
 
-def run_methyldackel(input, output, params, threads):
-
-    print('Running MethylDackel')
-    subprocess.run(
-            f"""
-            MethylDackel extract \
-            --ignoreFlags 3840 \
-            --requireFlags 0 \
-            {params.motif_params} \
-            {params.sampling_options} \
-            -o {params.prefix} \
-            -q 15 \
-            -p 15 \
-            -@ {threads} \
-            {input.ref_genome_unconverted} \
-            {input.bam}
-            """.split()
-    )
-    print('Done with MethylDackel')
-
-    chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
-
-    assert len(output) % 4 == 0
-    for i in range(int(len(output) / 4)):
-        bed, bedgraph, parquet, tmp_bedgraph  = output[4*i:(4*i)+4]
-        # convert bedgraph to bed and parquet
-        shutil.copy(tmp_bedgraph, bedgraph)
-        print('Create parquet and BED file')
-        df = pd.read_csv(
-                bedgraph,
-                # '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/wgbs/scwgbs_alignment/results-per-entity/hsc_pr-scbs_ex-test-1_cls-10_1/blood/meth-calls/partial-meth-calls/SE_hsc_pr-scbs_ex-test-1_cls-10_1_blood_per-cytosine_CpG.bedGraph',
-                sep='\t',
-                skiprows=1,
-                names=['#Chromosome', 'Start', 'End', 'beta_value', 'n_meth', 'n_unmeth'],
-                dtype={'#Chromosome': chrom_dtype}
-        )
-        # Discard unwanted chromosomes/or more commonly: contigs (not in config['chromosomes'])
-        df = df.dropna(subset=['#Chromosome'])
-        df['n_total'] = df.eval('n_meth + n_unmeth')
-        df['beta_value'] = df.eval('n_meth / n_total')
-        # Add motif column
-        # TODO: improve
-        if 'CpG' in bed:
-            motif = 'CG'
-        elif 'CHG' in bed:
-            motif  = 'CHG'
-        elif 'CHH' in bed:
-            motif = 'CHH'
-        else:
-            motif = 'NA'
-        df['motif'] = motif
-
-        # Final column order
-        df = df[['#Chromosome', 'Start', 'End', 'motif', 'beta_value', 'n_total', 'n_meth']]
-
-        # Save to BED and parquet
-        df.to_csv(bed, sep='\t', header=True, index=False)
-        df.rename(columns={'#Chromosome': 'Chromosome'}).to_parquet(parquet)
-        print('done')
-        # else: continue
-
 methyldackel_input = dict(
     bam = config['result_patterns']['se_bam'],
     ref_genome_unconverted = ancient(config['genome_fa']),
@@ -533,12 +474,41 @@ rule methyldackel_se_CG_per_cytosine_sampled:
         run_methyldackel(input, output, params, threads)
 
 
+rule methyldackel_merge_context:
+    input:
+        ref_genome_unconverted = ancient(config['genome_fa']),
+        bedgraph = fp_to_bedgraph(config['result_patterns']['se_mcalls_cytosines_per_motif']),
+    output:
+        bed = config['result_patterns']['se_mcalls_merged_per_motif'],
+        bedgraph = fp_to_bedgraph(config['result_patterns']['se_mcalls_merged_per_motif']),
+        parquet = fp_to_parquet(config['result_patterns']['se_mcalls_merged_per_motif']),
+    params:
+        chromosomes = config['chromosomes'],
+        avg_mem = 8000,
+        max_mem = 12000,
+        walltime = '00:20',
+        name = 'methyldackel_SE_mergeContext_{entity}_{sample}_{motif}{region}',
+    log:
+        config['log_dir'] + '/methyldackel_SE_mergeContext_{entity}_{sample}_{motif}{region}'
+    run:
+        from pandas.api.types import CategoricalDtype
 
+        print('run MethylDackel MergeContext')
+        shell("""
+        MethylDackel mergeContext \
+        -o {output.bedgraph} \
+        {input.ref_genome_unconverted} \
+        {input.bedgraph}
+        """)
 
-# --nOT   6,0,6,0 \
-# --nOB   6,0,6,0 \
-# --nCTOT 6,0,6,0 \
-# --nCTOB 6,0,6,0 \
+        print('Convert BedGraph to other file formats')
+        methyldackel_bedgraph_to_bed_and_parquet(
+                bed=output.bed,
+                bedgraph=output.bedgraph,
+                chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True),
+                parquet=output.parquet
+        )
+
 
 # ==========================================================================================
 # Generate methyl-converted version of the reference genome, if necessary:
