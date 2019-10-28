@@ -23,8 +23,9 @@ metadata_table_tsv:
 fastq_pattern:
   /icgc/dkfzlsdf/project/mouse_hematopoiesis_PBAT/sequencing/whole_genome_bisulfite_tagmentation_sequencing/view-by-pid/{entity}/{sample}/paired/run{run}/sequence/AS-{asid}-LR-{lane}_R{read_number}.fastq.gz
 
-protocol: sctm
+protocol: scnmt
 
+illumina_machine: 'nextseq'
 
 protocol_config:
   scnmt:
@@ -46,37 +47,37 @@ protocol_config:
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-1
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-0
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
-#  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+  - lsk150_pr-hiera_ex-scnmt-1_cls-1
+  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+  - lsk150_pr-hiera_ex-scnmt-1_cls-25
 #  - lsk150_pr-hiera_ex-sctm-1_cls-0
 #  - lsk150_pr-hiera_ex-sctm-1_cls-1
 #  - lsk150_pr-hiera_ex-sctm-1_cls-25
-  - bcells_pr-scbs_ex-test-1_cls-100_1
-  - bcells_pr-scbs_ex-test-1_cls-10_1
-  - bcells_pr-scbs_ex-test-1_cls-1_1
-  - bcells_pr-scbs_ex-test-1_cls-1_2
-  - bcells_pr-scbs_ex-test-1_cls-1_3
-  - bcells_pr-scbs_ex-test-1_cls-1_4
-  - bcells_pr-scbs_ex-test-1_cls-1_5
-  - bcells_pr-scbs_ex-test-1_cls-1_6
-  - ctr_pr-scbs_ex-test-1_cls-0_1
-  - hsc_pr-scbs_ex-test-1_cls-10_1
-  - hsc_pr-scbs_ex-test-1_cls-1_1
-  - hsc_pr-scbs_ex-test-1_cls-1_2
-  - hsc_pr-scbs_ex-test-1_cls-1_3
-  - hsc_pr-scbs_ex-test-1_cls-1_4
-  - hsc_pr-scbs_ex-test-1_cls-1_5
-  - hsc_pr-scbs_ex-test-1_cls-1_6
-  - hsc_pr-scbs_ex-test-1_cls-1_7
-  - hsc_pr-scbs_ex-test-1_cls-1_8
-  - monos_pr-scbs_ex-test-1_cls-10_1
-  - monos_pr-scbs_ex-test-1_cls-1_1
-  - monos_pr-scbs_ex-test-1_cls-1_2
-  - monos_pr-scbs_ex-test-1_cls-1_3
-  - monos_pr-scbs_ex-test-1_cls-1_4
-  - monos_pr-scbs_ex-test-1_cls-1_5
+#  - bcells_pr-scbs_ex-test-1_cls-100_1
+#  - bcells_pr-scbs_ex-test-1_cls-10_1
+#  - bcells_pr-scbs_ex-test-1_cls-1_1
+#  - bcells_pr-scbs_ex-test-1_cls-1_2
+#  - bcells_pr-scbs_ex-test-1_cls-1_3
+#  - bcells_pr-scbs_ex-test-1_cls-1_4
+#  - bcells_pr-scbs_ex-test-1_cls-1_5
+#  - bcells_pr-scbs_ex-test-1_cls-1_6
+#  - ctr_pr-scbs_ex-test-1_cls-0_1
+#  - hsc_pr-scbs_ex-test-1_cls-10_1
+#  - hsc_pr-scbs_ex-test-1_cls-1_1
+#  - hsc_pr-scbs_ex-test-1_cls-1_2
+#  - hsc_pr-scbs_ex-test-1_cls-1_3
+#  - hsc_pr-scbs_ex-test-1_cls-1_4
+#  - hsc_pr-scbs_ex-test-1_cls-1_5
+#  - hsc_pr-scbs_ex-test-1_cls-1_6
+#  - hsc_pr-scbs_ex-test-1_cls-1_7
+#  - hsc_pr-scbs_ex-test-1_cls-1_8
+#  - monos_pr-scbs_ex-test-1_cls-10_1
+#  - monos_pr-scbs_ex-test-1_cls-1_1
+#  - monos_pr-scbs_ex-test-1_cls-1_2
+#  - monos_pr-scbs_ex-test-1_cls-1_3
+#  - monos_pr-scbs_ex-test-1_cls-1_4
+#  - monos_pr-scbs_ex-test-1_cls-1_5
 
 
 # Other input paths
@@ -106,6 +107,13 @@ results_dir:
 results_prefix:
   '{protocol}/results-per-entity/{entity}/{sample}/smk-wgbs/{config_name}_{workflow_version}'
 
+multiqc_by_experiment:
+  '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/{protocol}/cohort-results/experiment-qc/{experiment}-multiqc.html'
+
+experiment_name:
+  'scnmt-1'
+#  'pilot-scM'
+
 # [required]
 log_dir: logs
 
@@ -118,6 +126,9 @@ result_patterns:
   # basename must match basename of atomic_bam_unsorted, because bismark output name cannot be changed when using parallel processing
   trimmed_fastq:
     'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed.fastq.gz'
+  fastq_fastqc:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastqc.zip'
+
 
   # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
   # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
@@ -127,6 +138,10 @@ result_patterns:
     'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-motif_{motif}{region}.bed'
   se_bam:
     'alignments/partial-alignments/SE_{entity}_{sample}.bam'
+  se_bam_samtools_stats:
+    'alignments/partial-alignments/SE_{entity}_{sample}_samtools-stats.txt'
+  se_bam_samtools_flagstats:
+    'alignments/partial-alignments/SE_{entity}_{sample}_samtools-flagstats.txt'
   se_library_bam:
     'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}.bam'
   # to allow arbitrary uid tags without a uid keyword (uid_run-abc_lane-001 is not consistent),

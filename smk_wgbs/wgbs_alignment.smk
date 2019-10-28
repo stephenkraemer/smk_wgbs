@@ -1,22 +1,58 @@
 """
 export PATH=/home/kraemers/projects/Bismark:$PATH
 
+cd /icgc/dkfzlsdf/analysis/hs_ontogeny
+
 snakemake \
 --snakefile $(smk_wgbs_snakefile) \
 --latency-wait 120 \
 --configfile $(smk_wgbs_demo_config) \
---forcerun methyldackel_merge_context \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
 --keep-going \
+--config \
+  experiment_name=sctm-1 \
+  protocol=sctm \
+  'entities=[
+     "lsk150_pr-hiera_ex-sctm-1_cls-0",
+     "lsk150_pr-hiera_ex-sctm-1_cls-1",
+     "lsk150_pr-hiera_ex-sctm-1_cls-25"
+  ]' \
 --dryrun \
 
+# scmt
+--config \
+  experiment_name=sctm-1 \
+  protocol=sctm \
+  'entities=[
+     "lsk150_pr-hiera_ex-sctm-1_cls-0",
+     "lsk150_pr-hiera_ex-sctm-1_cls-1",
+     "lsk150_pr-hiera_ex-sctm-1_cls-25"
+  ]' \
+
+# scnmt
+--config \
+  experiment_name=scnmt-1 \
+  protocol=scnmt \
+  'entities=[
+    "lsk150_pr-hiera_ex-scnmt-1_cls-1",
+    "lsk150_pr-hiera_ex-scnmt-1_cls-0",
+    "lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg",
+    "lsk150_pr-hiera_ex-scnmt-1_cls-25"
+  ]' \
 
 
---rerun-incomplete \
---forcerun trim_reads_pe \
+--forcerun multiqc \
+
+
 --forcerun bismark_se_local_alignment_per_lane \
+--forcerun fastqc samtools_stats \
+--forcerun methyldackel_merge_context \
 --forcerun nome_filtering \
+--forcerun trim_reads_pe \
+--rerun-incomplete \
+-p \
+
 """
 
 import time
@@ -137,11 +173,22 @@ for _, row_ser in metadata_table.iterrows():
                 region=region,
         ))
 
+multiqc_report_fp = sel_expand(config['multiqc_by_experiment'],
+                               protocol=config['protocol'],
+                               experiment=config['experiment_name'])
+
+
+fastqc_reports = (
+    metadata_table[['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
+        .apply(lambda ser: expand(config['result_patterns']['fastq_fastqc'], **ser)[0], axis=1)
+)
+
 
 rule all:
     input:
          targets,
-         # trimmed_fastq_files = trimmed_fastqs,
+         multiqc_report_fp,
+         fastqc_reports,
 
 # SE Alignment
 # ======================================================================
@@ -576,6 +623,7 @@ rule trim_reads_pe:
           max_mem = 6000,
           name = 'trim_reads_{entity}_{sample}',
           walltime = '00:30',
+          phred_filter_command = '--nextseq-trim 10' if config['illumina_machine'] == 'nextseq' else '-q 10',
     threads: 16
     # currently, do not trim random hexamers priming sites \
     # note that this anyway does not take care of priming sites at the end of short reads \
@@ -591,7 +639,7 @@ rule trim_reads_pe:
          -A AGATCGGAAGAGCG \
          -o {output.fq_r1} \
          -p {output.fq_r2} \
-         -q 10 \
+         {params.phred_filter_command} \
          -u 6 \
          -U 6 \
          --minimum-length 30 \
@@ -639,3 +687,132 @@ rule nome_filtering:
        config['log_dir'] + '/nome-filtering_{protocol}_{entity}_{sample}{region}.log'
     run:
         smk_wgbs.tools.nome_filtering(input, output, params)
+
+
+rule samtools_stats:
+    input:
+         bam = config['result_patterns']['se_bam'],
+         ref_genome_unconverted = ancient(config['genome_fa']),
+    output:
+          config['result_patterns']['se_bam_samtools_stats'],
+    params:
+          avg_mem = 500,
+          max_mem = 1000,
+          walltime = '00:20',
+          name = 'samtools_stats_{entity}_{sample}',
+    shell:
+         """
+         samtools stats \
+         --insert-size 3000 \
+         --ref-seq {input.ref_genome_unconverted} \
+         --remove-dups \
+         {input.bam} > {output[0]}
+         """
+
+
+rule samtools_flagstats:
+    input:
+         bam = config['result_patterns']['se_bam'],
+    output:
+          config['result_patterns']['se_bam_samtools_flagstats'],
+    params:
+          avg_mem = 500,
+          max_mem = 1000,
+          walltime = '00:20',
+          name = 'samtools_flagstats_{entity}_{sample}',
+    shell:
+         """
+         samtools flagstat {input.bam} > {output[0]}
+         """
+
+
+samtools_stat_files = (
+    metadata_table[['entity', 'sample', 'protocol']]
+        .drop_duplicates()
+        .apply(
+            lambda ser: sel_expand(
+                    config['result_patterns']['se_bam_samtools_stats'], **ser
+            ),
+            axis=1
+    )
+)
+
+samtools_flagstat_files = (
+    metadata_table[['entity', 'sample', 'protocol']]
+        .drop_duplicates()
+        .apply(
+            lambda ser: sel_expand(
+                    config['result_patterns']['se_bam_samtools_flagstats'], **ser
+            ),
+            axis=1
+    )
+)
+
+
+bismark_report_pattern = (config['result_patterns']['se_atomic_bam_unsorted']
+                          .replace('.bam', '_SE_report.txt'))
+bismark_se_reports = (metadata_table[['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
+    .apply(lambda ser: expand(bismark_report_pattern, **ser)[0], axis=1)
+)
+
+rule multiqc:
+    input:
+         samtools_stat_files,
+         bismark_se_reports,
+         fastqc_reports,
+         samtools_flagstat_files,
+    output:
+          report_html=multiqc_report_fp,
+          file_list=multiqc_report_fp + '_file-list.txt',
+    params:
+          avg_mem = 5000,
+          max_mem = 10000,
+          walltime = '00:15',
+          name = f'multiqc_{config["name"]}',
+    run:
+        with open(output.file_list, 'wt') as fout:
+            fout.write('\n'.join(input) + '\n')
+        shell(f"""
+              multiqc \
+              --filename {output.report_html} \
+              --force \
+              --file-list {output.file_list}
+              """
+        )
+
+
+rule fastqc:
+    input:
+         unpack(find_fastqs),
+    output:
+          qc_r1 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1'),
+          fq_r1 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1').replace('_fastqc.zip', '.fastq.gz')),
+          qc_r2 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2'),
+          fq_r2 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2').replace('_fastqc.zip', '.fastq.gz')),
+    params:
+          output_dir = lambda wildcards, output: Path(output[0]).parent,
+          avg_mem = 2000,
+          max_mem = 4000,
+          walltime = '00:30',
+          name = 'fastqc',
+    threads: 2
+    # -c {input.adapter_sequences_tsv} \
+    run:
+        import os
+        from pathlib import Path
+        os.symlink(input.fq_r1, output.fq_r1)
+        os.symlink(input.fq_r2, output.fq_r2)
+        # -o {params.output_dir} \
+        shell(
+                """
+                fastqc \
+                --noextract \
+                --threads {threads} \
+                {output.fq_r1} {output.fq_r2}
+                """
+         )
+         # fastqc_r1_fp = Path(params.output_dir).joinpath(Path(input.fq_r1).name.replace('.fastq.gz', '_fastqc.zip'))
+         # fastqc_r2_fp = Path(params.output_dir).joinpath(Path(input.fq_r2).name.replace('.fastq.gz', '_fastqc.zip'))
+         # fastqc_r1_fp.rename(output.qc_r1)
+         # fastqc_r2_fp.rename(output.qc_r2)
+
