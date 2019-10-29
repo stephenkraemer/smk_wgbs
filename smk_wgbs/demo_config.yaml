@@ -1,4 +1,7 @@
 name: default-params
+alignment_combi: 'SE_PE'
+
+bismark_upto: -1
 
 # FASTQ Metadata table
 # --------------------
@@ -126,45 +129,58 @@ result_patterns:
   # basename must match basename of atomic_bam_unsorted, because bismark output name cannot be changed when using parallel processing
   trimmed_fastq:
     'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed.fastq.gz'
+  unmapped_fastq:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_unmapped.fastq.gz'
   fastq_fastqc:
     'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastqc.zip'
 
 
   # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
   # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
-  se_mcalls_cytosines_per_motif:
-    'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-cytosine_{motif}{region}.bed'
-  se_mcalls_merged_per_motif:
-    'meth-calls/partial-meth-calls/SE_{entity}_{sample}_per-motif_{motif}{region}.bed'
-  se_bam:
-    'alignments/partial-alignments/SE_{entity}_{sample}.bam'
-  se_bam_samtools_stats:
-    'alignments/partial-alignments/SE_{entity}_{sample}_samtools-stats.txt'
-  se_bam_samtools_flagstats:
-    'alignments/partial-alignments/SE_{entity}_{sample}_samtools-flagstats.txt'
-  se_library_bam:
-    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}.bam'
+  final_mcalls_cytosines_per_motif:
+    'meth-calls/{entity}_{sample}_{alignment_combi}_per-cytosine_{motif}{region}.bed'
+  final_mcalls_merged_per_motif:
+    'meth-calls/{entity}_{sample}_{alignment_combi}_per-motif_{motif}{region}.bed'
+  pe_or_se_mcalls_cytosines_per_motif:
+    'meth-calls/partial-meth-calls/{pairing}_{entity}_{sample}_per-cytosine_{motif}{region}.bed'
+  pe_or_se_mcalls_merged_per_motif:
+    'meth-calls/partial-meth-calls/{pairing}_{entity}_{sample}_per-motif_{motif}{region}.bed'
+  final_bam:
+    'alignments/{entity}_{sample}_{alignment_combi}.bam'
+  pe_or_se_bam:
+    'alignments/partial-alignments/{pairing}_{entity}_{sample}.bam'
+  final_bam_samtools_stats:
+    'alignments/{entity}_{sample}_{alignment_combi}_samtools-stats.txt'
+  final_bam_samtools_flagstats:
+    'alignments/{entity}_{sample}_{alignment_combi}_samtools-flagstats.txt'
+    #   'alignments/partial-alignments/SE_{entity}_{sample}_samtools-flagstats.txt'
+  pe_or_se_library_bam:
+    'alignments/partial-alignments/{pairing}_{entity}_{sample}_lib-{lib}.bam'
   # to allow arbitrary uid tags without a uid keyword (uid_run-abc_lane-001 is not consistent),
   # lib may not contain underscorse
   # uid is composed of all other fields in metadata table
   # --basename to control name in bismark currently not compatible with multicore run
   # so we have to use the fastq stem (bismarks default)
   se_atomic_bam_unsorted:
-    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_bismark_bt2.bam'
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_unsorted_bismark_bt2.bam'
   se_atomic_bam_sorted:
-    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}.bam'
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_sorted.bam'
+  pe_atomic_bam_unsorted:
+    'alignments/partial-alignments/PE_{entity}_{sample}_lib-{lib}_{uid}_unsorted_bismark_bt2.bam'
+  pe_atomic_bam_sorted:
+    'alignments/partial-alignments/PE_{entity}_{sample}_lib-{lib}_{uid}_sorted.bam'
   cg_full_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CG-full{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CG-full{region}.parquet'
   cg_meth_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CG-meth{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CG-meth{region}.parquet'
   ch_full_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CH-full{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CH-full{region}.parquet'
   ch_acc_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CH-acc{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CH-acc{region}.parquet'
   chg_meth_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CHG-meth{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CHG-meth{region}.parquet'
   chh_meth_parquet:
-    'meth-calls/{entity}_{sample}_NOMe_per-cytosine_CHH-meth{region}.parquet'
+    'meth-calls/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CHH-meth{region}.parquet'
 
 
 # Else

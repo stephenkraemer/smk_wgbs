@@ -5,20 +5,31 @@ cd /icgc/dkfzlsdf/analysis/hs_ontogeny
 
 snakemake \
 --snakefile $(smk_wgbs_snakefile) \
---latency-wait 120 \
+--latency-wait 60 \
 --configfile $(smk_wgbs_demo_config) \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
 --keep-going \
+--forcerun trim_reads_pe \
 --config \
-  experiment_name=sctm-1 \
+  experiment_name=scnmt-1 \
+  protocol=scnmt \
+  'entities=[
+    "lsk150_pr-hiera_ex-scnmt-1_cls-25"
+  ]' \
+  upto=10000 \
+--dryrun \
+
+
+
+# scm
+--config \
+  experiment_name=pilot-scM \
   protocol=sctm \
   'entities=[
-     "lsk150_pr-hiera_ex-sctm-1_cls-0",
-     "lsk150_pr-hiera_ex-sctm-1_cls-1",
-     "lsk150_pr-hiera_ex-sctm-1_cls-25"
+     "hsc_pr-scbs_ex-test-1_cls-1_2",
   ]' \
---dryrun \
+  upto=10000 \
 
 # scmt
 --config \
@@ -43,13 +54,7 @@ snakemake \
 
 
 --forcerun multiqc \
-
-
---forcerun bismark_se_local_alignment_per_lane \
---forcerun fastqc samtools_stats \
---forcerun methyldackel_merge_context \
 --forcerun nome_filtering \
---forcerun trim_reads_pe \
 --rerun-incomplete \
 -p \
 
@@ -57,10 +62,12 @@ snakemake \
 
 import time
 import os
+import re
 from pathlib import Path
 import pandas as pd
 from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
 from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet
+from functools import partial
 import smk_wgbs.tools
 
 
@@ -149,6 +156,7 @@ sampling_name = '1:40e-80e'
 targets = []
 for _, row_ser in metadata_table.iterrows():
     for motif, user_request in config['protocol_config'][config['protocol']]['motifs'].items():
+
         if not user_request:
             continue
         elif user_request == 'sampled':
@@ -157,22 +165,34 @@ for _, row_ser in metadata_table.iterrows():
             region = ''
         else:
             raise ValueError()
+
         if config['protocol_config'][config['protocol']].get('is_nome_seq', False):
-            pattern = config['result_patterns']['cg_full_parquet']
+            patterns = [sel_expand(config['result_patterns']['cg_full_parquet'],
+                                   alignment_combi=config['alignment_combi'])]
         else:
+            patterns = [sel_expand(config['result_patterns']['final_mcalls_merged_per_motif'],
+                                   alignment_combi=config['alignment_combi'])]
             if motif == 'CHH':
-                pattern = config['result_patterns']['se_mcalls_cytosines_per_motif']
+                pass
             elif motif in ['CG', 'CHG']:
-                pattern = config['result_patterns']['se_mcalls_merged_per_motif']
+                pairings = config['alignment_combi'].split('_')
+                for pairing in pairings:
+                    patterns.append(
+                            sel_expand(
+                                    config['result_patterns']['pe_or_se_mcalls_merged_per_motif'],
+                                    pairing=pairing
+                            )
+                    )
             else:
                 ValueError()
-        targets.append(sel_expand(
-                pattern,
-                **row_ser,
-                motif=motif,
-                region=region,
-        ))
-
+        for pattern in patterns:
+            targets.append(sel_expand(
+                    pattern,
+                    **row_ser,
+                    motif=motif,
+                    region=region,
+            ))
+print(sorted(targets), sep='\n')
 multiqc_report_fp = sel_expand(config['multiqc_by_experiment'],
                                protocol=config['protocol'],
                                experiment=config['experiment_name'])
@@ -188,7 +208,7 @@ rule all:
     input:
          targets,
          multiqc_report_fp,
-         fastqc_reports,
+         # fastqc_reports,
 
 # SE Alignment
 # ======================================================================
@@ -212,9 +232,14 @@ rule all:
                          the specified folder does not exist, Bismark will attempt to create it first. The path to the
                          temporary folder can be either relative or absolute.
 """
-rule bismark_se_local_alignment_per_lane:
+if config['alignment_combi'] == 'SE_PE':
+    se_fq_input = config['result_patterns']['unmapped_fastq']
+else:
+    se_fq_input = config['result_patterns']['trimmed_fastq']
+
+rule bismark_se_atomic_alignment:
     input:
-         fq = config['result_patterns']['trimmed_fastq'],
+         fq = se_fq_input,
          # not directly used, but still import files (parent directory path is bismark arg)
          refconvert_CT = config['genome_dir'] + "/Bisulfite_Genome/CT_conversion/genome_mfa.CT_conversion.fa",
          refconvert_GA = config['genome_dir'] + "/Bisulfite_Genome/GA_conversion/genome_mfa.GA_conversion.fa",
@@ -227,50 +252,77 @@ rule bismark_se_local_alignment_per_lane:
         genome_dir = config['genome_dir'],
         avg_mem = 12000,
         max_mem = 16000,
-        name = 'bismark_alignment_{entity}_{sample}',
+        name = 'bismark_alignment_SE_{entity}_{sample}',
         walltime = '08:00',
         # walltime = '00:30',
     threads: 6
     log:
-        config['log_dir'] + '/bismark_atomic-alignment_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
+        config['log_dir'] + '/bismark_atomic-alignment_SE_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
     # basename and multicore together are not possible
     # --score_min G,10,2 \
     # --local
     # --parallel 4 \
     run:
-        # temp_dir
-        # - need different temp_dir per atomic alignment
-        # - rule removes the atomic temp_dir at the end of the rule using the temp()
-        # directive. This is more robust than removing the directory inside the rule
-        # (in case of crashed jobs)
-        # - if bismark changes its behavior to completely remove the temp_dir at the end
-        # of its run, this rule will fail, because the temp_dir is an expected (temp) output
-        from pathlib import Path
-        import re
-
-        output_dir = Path(output.bam).parent
-        shell(
-           """
-           bismark \
-           --single_end {input.fq} \
-           --non_directional \
-           --local \
-           --output_dir {output_dir} \
-           --temp_dir {output.temp_dir}\
-           {params.genome_dir} \
-           > {log} 2>&1
-           """
+        smk_wgbs.tools.run_bismark_alignment(
+                input, output, log, params, is_paired=False, upto=config['upto'],
         )
 
-        # obtain paths where bismark will place files
-        # bismark hardcodes output files basenames
-        # (--basename cannot be used together with multithreading atm)
-        stem = re.sub('.fastq(.gz)?$', '', Path(input.fq).name)
-        bismark_bam_fp = output_dir.joinpath(stem + '_bismark_bt2.bam')
-        bismark_se_report_fp = output_dir.joinpath(stem + '_bismark_bt2_SE_report.txt')
-        # Move results from hard coded paths to user-specified paths
-        bismark_bam_fp.rename(output.bam)
-        bismark_se_report_fp.rename(output.bismark_report)
+
+rule bismark_pe_atomic_alignment:
+    input:
+         fq_r1 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='1'),
+         fq_r2 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='2'),
+         # not directly used, but still import files (parent directory path is bismark arg)
+         refconvert_CT = config['genome_dir'] + "/Bisulfite_Genome/CT_conversion/genome_mfa.CT_conversion.fa",
+         refconvert_GA = config['genome_dir'] + "/Bisulfite_Genome/GA_conversion/genome_mfa.GA_conversion.fa",
+    output:
+          bam = config['result_patterns']['pe_atomic_bam_unsorted'],
+          unmapped_fq1 = sel_expand(config['result_patterns']['unmapped_fastq'],
+                                    read_number='1'),
+          unmapped_fq2 = sel_expand(config['result_patterns']['unmapped_fastq'],
+                                    read_number='2'),
+          bismark_report = config['result_patterns']['pe_atomic_bam_unsorted'].replace('.bam', '_PE_report.txt'),
+          temp_dir = temp(directory(config['result_patterns']['pe_atomic_bam_unsorted'] + '___bismark_tempfiles'))
+    # non specified output files: will not be auto-removed
+    params:
+          genome_dir = config['genome_dir'],
+          avg_mem = 24000,
+          max_mem = 32000,
+          name = 'bismark_alignment_PE_{entity}_{sample}',
+          walltime = '08:00',
+          # walltime = '00:30',
+    threads: 6
+    log:
+       config['log_dir'] + '/bismark_atomic-alignment_PE_{protocol}_{entity}_{sample}_{uid}_{lib}.log'
+    # basename and multicore together are not possible
+    # --score_min G,10,2 \
+    # --local
+    # --parallel 4 \
+    run:
+        smk_wgbs.tools.run_bismark_alignment(
+                input, output, log, params, is_paired=True, upto=config['upto'],
+        )
+
+def find_final_alignment_input(wildcards):
+    if wildcards.alignment_combi == 'SE':
+        return expand(config['result_patterns']['pe_or_se_bam'], **wildcards, pairing='SE')
+    elif wildcards.alignment_combi == 'PE':
+        return expand(config['result_patterns']['pe_or_se_bam'], **wildcards, pairing='PE')
+    else:
+        return expand(config['result_patterns']['pe_or_se_bam'], **wildcards, pairing=['PE', 'SE'])
+
+rule final_alignment:
+    input:
+         find_final_alignment_input,
+    output:
+          bam = config['result_patterns']['final_bam'],
+    params:
+          avg_mem = 6000,
+          max_mem = 8000,
+          name = 'merge-final-alignment_{entity}_{sample}',
+          walltime = '02:00',
+    run:
+        smk_wgbs.tools.merge_or_symlink(input, output)
 
 
 rule bismark_se_sort_atomic_bam:
@@ -288,7 +340,25 @@ rule bismark_se_sort_atomic_bam:
     shell:
         "samtools sort -o {output} -T {output} -@ 8 {input}"
 
+
+rule bismark_pe_sort_atomic_bam:
+    input:
+         bam = config['result_patterns']['pe_atomic_bam_unsorted'],
+    output:
+          bam = config['result_patterns']['pe_atomic_bam_sorted'],
+    params:
+          # default -m: 768 Mb
+          avg_mem = 8 * 1000,
+          max_mem = 8 * 1600,
+          walltime = '00:30',
+          name = 'sort_atomic_bam_PE_{entity}_{sample}_{lib}_{uid}'
+    threads: 8
+    shell:
+         "samtools sort -o {output} -T {output} -@ 8 {input}"
+
+
 def find_atomic_bams_for_library(wildcards):
+    # import pudb; pudb.set_trace()
     df = metadata_table
     matches_library_and_read = (
             (df['protocol'] == wildcards.protocol)
@@ -297,32 +367,41 @@ def find_atomic_bams_for_library(wildcards):
             & (df['lib'] == wildcards.lib)
             # & (df['read_number'] == wildcards.read_number)
     )
-    ser = (df
-           .loc[matches_library_and_read, ['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
-           .apply(lambda ser: expand(config['result_patterns']['se_atomic_bam_sorted'], **ser)[0],
-                  axis=1)
-           )
+    wildcard_cols = ['protocol', 'entity', 'sample', 'lib', 'uid']
+    if wildcards.pairing == 'SE':
+        atomic_bam_pattern = config['result_patterns']['se_atomic_bam_sorted']
+        wildcard_cols += ['read_number']
+    else:
+        atomic_bam_pattern = config['result_patterns']['pe_atomic_bam_sorted']
+    # duplicates only allowed for PE
+    wildcard_df = df.loc[matches_library_and_read, wildcard_cols]
+    if wildcards.pairing == 'SE':
+        assert wildcard_df.duplicated().sum() == 0
+    else:
+        wildcard_df = wildcard_df.drop_duplicates()
+    ser = wildcard_df.apply(lambda ser: expand(atomic_bam_pattern, **ser)[0], axis=1)
     l = ser.to_list()
+    print(l)
     return l
 
 
-rule bismark_se_merge_library_mdup:
+rule bismark_merge_library_mdup:
     input:
         find_atomic_bams_for_library
     output:
-         bam = config['result_patterns']['se_library_bam'],
-         bai = config['result_patterns']['se_library_bam'] + '.bai',
+         bam = config['result_patterns']['pe_or_se_library_bam'],
+         bai = config['result_patterns']['pe_or_se_library_bam'] + '.bai',
          metrics = re.sub(
                  '.bam$',
                  '_mdup-metrics.txt',
-                 config['result_patterns']['se_library_bam']),
+                 config['result_patterns']['pe_or_se_library_bam']),
     params:
           # default -m: 768 Mb
           avg_mem = 8 * 1000,
           max_mem = 8 * 1600,
           max_mem_gb = '13G',
           walltime = '00:30',
-          name = 'mdup_merge_{entity}_{sample}_{lib}',
+          name = 'mdup_merge_{pairing}_{entity}_{sample}_{lib}',
           input_spec = lambda wildcards, input: ' '.join(f'INPUT={i}' for i in input)
     # java  -jar picard.jar
     # OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500 \ #changed from default of 100
@@ -350,34 +429,30 @@ def find_library_bams(wildcards):
            .loc[matches_library, ['protocol', 'entity', 'sample', 'lib']]
            .drop_duplicates()
             # expand always returns list, get string out of list of length 1
-           .apply(lambda ser: expand(config['result_patterns']['se_library_bam'], **ser)[0],
+           .apply(lambda ser: expand(
+                    config['result_patterns']['pe_or_se_library_bam'],
+                    **ser,
+                    pairing=wildcards.pairing)[0],
                   axis=1)
            )
     l = ser.to_list()
     return l
-# TODO: index
-rule bismark_se_merge_libraries:
+
+
+rule bismark_merge_libraries:
     input:
         find_library_bams
     output:
-        bam = config['result_patterns']['se_bam'],
-        bai = config['result_patterns']['se_bam'] + '.bai',
+        bam = config['result_patterns']['pe_or_se_bam'],
+        bai = config['result_patterns']['pe_or_se_bam'] + '.bai',
     # TODO: function which returns **resources and returns minimal resources if only hard linking is required
     params:
           avg_mem = 6000,
           max_mem = 8000,
-          name = 'merge-lib_{entity}_{sample}',
+          name = 'merge-lib_{entity}_{sample}_{pairing}',
           walltime = '00:30',
     run:
-        # hard link if only one library, else merge
-        import os
-        import subprocess
-        if len(input) == 1:
-            os.link(input[0], output.bam)
-            os.link(input[0] + '.bai', output.bam + '.bai')
-        else:
-            subprocess.run('samtools merge -f -r'.split() + output + input)
-            subprocess.run(['samtools', 'index', output.bam])
+        smk_wgbs.tools.merge_or_symlink(input, output)
 
 
 
@@ -421,7 +496,7 @@ def get_methyldackel_walltime(wildcards):
 
 
 methyldackel_input = dict(
-    bam = config['result_patterns']['se_bam'],
+    bam = config['result_patterns']['pe_or_se_bam'],
     ref_genome_unconverted = ancient(config['genome_fa']),
 )
 
@@ -444,7 +519,7 @@ def get_methyldackel_output_params(
                 motif_params_l.append(f'--{motif}')
                 methyldackel_walltime = chh_walltime  # walltime for full run including CHH and/or CHG
             bed = Path(sel_expand(
-                    config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                    config['result_patterns']['pe_or_se_mcalls_cytosines_per_motif'],
                     motif=motif,
                     region=f'_sampled-{sampling_name}' if sampling_name else '',
             ))
@@ -453,11 +528,11 @@ def get_methyldackel_output_params(
                 bed,
                 bed.with_suffix('.bedGraph'),
                 bed.with_suffix('.parquet'),
-                temp(bed.parent.joinpath('SE_{entity}_{sample}' + f'_{methyldackel_motif}.bedGraph')),
+                temp(bed.parent.joinpath('{pairing}_{entity}_{sample}' + f'_{methyldackel_motif}.bedGraph')),
             ]
     motif_params_str = ' '.join(motif_params_l)
     if not methyldackel_output:
-        methyldackel_output = [sel_expand(config['result_patterns']['se_mcalls_cytosines_per_motif'],
+        methyldackel_output = [sel_expand(config['result_patterns']['pe_or_se_mcalls_cytosines_per_motif'],
                                motif='UNUSED',
                                region='UNUSED')]
     return methyldackel_output, methyldackel_walltime, motif_params_str
@@ -468,7 +543,7 @@ methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_
         sampling_name='',
         calling_mode='full'
 )
-rule methyldackel_se_CG_per_cytosine:
+rule methyldackel_per_cytosine_per_motif:
     input:
           **methyldackel_input,
     output:
@@ -476,10 +551,10 @@ rule methyldackel_se_CG_per_cytosine:
     params:
           avg_mem = 6000,
           max_mem = 10000,
-          name = 'methyldackel_se_per_cytosine_{entity}_{sample}',
+          name = 'methyldackel_per_cytosine_{pairing}_{entity}_{sample}',
           walltime = methyldackel_walltime,
           prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
-                  f'SE_{wildcards.entity}_{wildcards.sample}'),
+                  f'{wildcards.pairing}_{wildcards.entity}_{wildcards.sample}'),
           # TODO: is config directly available in rule?
           chromosomes = config['chromosomes'],
           motif_params = motif_params_str,
@@ -487,7 +562,7 @@ rule methyldackel_se_CG_per_cytosine:
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
-       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}.log'
+       config['log_dir'] + '/methyldackel_per_cytosine_per_motif:{pairing}_{protocol}_{entity}_{sample}.log'
     run:
         run_methyldackel(input, output, params, threads)
 
@@ -497,7 +572,7 @@ methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_
         sampling_name=sampling_name,
         calling_mode='sampled')
 
-rule methyldackel_se_CG_per_cytosine_sampled:
+rule methyldackel_per_cytosine_per_motif_sampled:
     input:
          **methyldackel_input,
     output:
@@ -508,7 +583,7 @@ rule methyldackel_se_CG_per_cytosine_sampled:
           name = 'methyldackel_se_per_cytosine_{entity}_{sample}' + sampling_name,
           walltime = methyldackel_walltime,
           prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
-                  f'SE_{wildcards.entity}_{wildcards.sample}'),
+                  f'{wildcards.pairing}_{wildcards.entity}_{wildcards.sample}'),
           # TODO: is config directly available in rule?
           chromosomes = config['chromosomes'],
           motif_params = motif_params_str,
@@ -516,7 +591,7 @@ rule methyldackel_se_CG_per_cytosine_sampled:
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
-       config['log_dir'] + '/methyldackel_se_CG_per_cytosine:{protocol}_{entity}_{sample}.log'
+       config['log_dir'] + '/methyldackel_per_cytosine_per_motif_sampled:{pairing}_{protocol}_{entity}_{sample}.log'
     run:
         run_methyldackel(input, output, params, threads)
 
@@ -524,11 +599,11 @@ rule methyldackel_se_CG_per_cytosine_sampled:
 rule methyldackel_merge_context:
     input:
         ref_genome_unconverted = ancient(config['genome_fa']),
-        bedgraph = fp_to_bedgraph(config['result_patterns']['se_mcalls_cytosines_per_motif']),
+        bedgraph = fp_to_bedgraph(config['result_patterns']['pe_or_se_mcalls_cytosines_per_motif']),
     output:
-        bed = config['result_patterns']['se_mcalls_merged_per_motif'],
-        bedgraph = fp_to_bedgraph(config['result_patterns']['se_mcalls_merged_per_motif']),
-        parquet = fp_to_parquet(config['result_patterns']['se_mcalls_merged_per_motif']),
+        bed = config['result_patterns']['pe_or_se_mcalls_merged_per_motif'],
+        bedgraph = fp_to_bedgraph(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
+        parquet = fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
     params:
         chromosomes = config['chromosomes'],
         avg_mem = 8000,
@@ -536,7 +611,7 @@ rule methyldackel_merge_context:
         walltime = '00:20',
         name = 'methyldackel_SE_mergeContext_{entity}_{sample}_{motif}{region}',
     log:
-        config['log_dir'] + '/methyldackel_SE_mergeContext_{entity}_{sample}_{motif}{region}'
+        config['log_dir'] + '/methyldackel_mergeContext_{pairing}_{entity}_{sample}_{motif}{region}'
     run:
         from pandas.api.types import CategoricalDtype
 
@@ -556,6 +631,65 @@ rule methyldackel_merge_context:
                 parquet=output.parquet
         )
 
+def find_merge_cytosine_level_calls_input(wildcards):
+    if wildcards.alignment_combi in ['SE', 'PE']:
+        return expand(fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_cytosines_per_motif']),
+                      **wildcards,
+                      pairing=wildcards.alignment_combi)
+    else:
+        return expand(fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_cytosines_per_motif']),
+                      **wildcards,
+                      pairing=['PE', 'SE'])
+
+final_mcalls_cyt_bed = config['result_patterns']['final_mcalls_cytosines_per_motif']
+rule final_mcalls:
+    input:
+         find_merge_cytosine_level_calls_input
+    output:
+         bed = final_mcalls_cyt_bed,
+         parquet = fp_to_parquet(final_mcalls_cyt_bed),
+         bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
+    params:
+          avg_mem = 8000,
+          max_mem = 12000,
+          walltime = '00:30',
+          name = 'merge-final-calls_{entity}_{sample}'
+    run:
+        smk_wgbs.tools.merge_mcalls(input, output, wildcards)
+
+final_mcalls_merged_bed = config['result_patterns']['final_mcalls_merged_per_motif']
+rule final_mcalls_merged_motifs:
+    input:
+         bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
+         ref_genome_unconverted = ancient(config['genome_fa']),
+    output:
+         bed = final_mcalls_merged_bed,
+         bedgraph = fp_to_bedgraph(final_mcalls_merged_bed),
+         parquet = fp_to_parquet(final_mcalls_merged_bed)
+    params:
+          avg_mem = 2000,
+          max_mem = 4000,
+          walltime = '01:00',
+          name = 'merge-context_final-mcalls_{entity}_{sample}_{motif}',
+          chromosomes = config['chromosomes'],
+    run:
+        from pandas.api.types import CategoricalDtype
+
+        print('run MethylDackel MergeContext')
+        shell("""
+        MethylDackel mergeContext \
+        -o {output.bedgraph} \
+        {input.ref_genome_unconverted} \
+        {input.bedgraph}
+        """)
+
+        print('Convert BedGraph to other file formats')
+        methyldackel_bedgraph_to_bed_and_parquet(
+                bed=output.bed,
+                bedgraph=output.bedgraph,
+                chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True),
+                parquet=output.parquet
+        )
 
 # ==========================================================================================
 # Generate methyl-converted version of the reference genome, if necessary:
@@ -593,24 +727,10 @@ rule bismark_genome_preparation:
 
 # cutadapt speed up linear with cores
 # parallelization requires pigz python package to be installed (by default if bismark is installed via conda)
-def find_fastqs(wildcards):
-    df = metadata_table
-    is_in_selected_pair = (
-            (df['protocol'] == wildcards.protocol)
-            & (df['entity'] == wildcards.entity)
-            & (df['sample'] == wildcards.sample)
-            & (df['lib'] == wildcards.lib)
-            & (df['uid'] == wildcards.uid)
-    )
-    fastq_r1_ser = df.loc[is_in_selected_pair & (df['read_number'] == '1'), 'path']
-    assert fastq_r1_ser.shape[0] == 1
-    fastq_r2_ser = df.loc[is_in_selected_pair & (df['read_number'] == '2'), 'path']
-    assert fastq_r2_ser.shape[0] == 1
-    return {'fq_r1': fastq_r1_ser.iloc[0], 'fq_r2': fastq_r2_ser.iloc[0]}
 
 rule trim_reads_pe:
     input:
-        unpack(find_fastqs)
+        unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
     output:
           fq_r1 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='1'),
           fq_r2 = sel_expand(config['result_patterns']['trimmed_fastq'], read_number='2'),
@@ -659,9 +779,10 @@ for motif, calling_mode in config['protocol_config'][config['protocol']]['motifs
         region = sampling_name
     input_d[motif] = fp_to_parquet(
             sel_expand(
-                    config['result_patterns']['se_mcalls_cytosines_per_motif'],
+                    config['result_patterns']['final_mcalls_cytosines_per_motif'],
                     motif=motif,
-                    region=region
+                    region=region,
+                    alignment_combi=config['alignment_combi']
             )
     )
 
@@ -684,17 +805,17 @@ rule nome_filtering:
           name = 'nome_filtering_{entity}_{sample}',
           chromosomes = config['chromosomes'],
     log:
-       config['log_dir'] + '/nome-filtering_{protocol}_{entity}_{sample}{region}.log'
+       config['log_dir'] + '/nome-filtering_{protocol}_{alignment_combi}_{entity}_{sample}{region}.log'
     run:
         smk_wgbs.tools.nome_filtering(input, output, params)
 
 
 rule samtools_stats:
     input:
-         bam = config['result_patterns']['se_bam'],
+         bam = config['result_patterns']['final_bam'],
          ref_genome_unconverted = ancient(config['genome_fa']),
     output:
-          config['result_patterns']['se_bam_samtools_stats'],
+          config['result_patterns']['final_bam_samtools_stats'],
     params:
           avg_mem = 500,
           max_mem = 1000,
@@ -712,9 +833,9 @@ rule samtools_stats:
 
 rule samtools_flagstats:
     input:
-         bam = config['result_patterns']['se_bam'],
+         bam = config['result_patterns']['final_bam'],
     output:
-          config['result_patterns']['se_bam_samtools_flagstats'],
+          config['result_patterns']['final_bam_samtools_flagstats'],
     params:
           avg_mem = 500,
           max_mem = 1000,
@@ -731,7 +852,9 @@ samtools_stat_files = (
         .drop_duplicates()
         .apply(
             lambda ser: sel_expand(
-                    config['result_patterns']['se_bam_samtools_stats'], **ser
+                    config['result_patterns']['final_bam_samtools_stats'],
+                    **ser,
+                    alignment_combi=config['alignment_combi'],
             ),
             axis=1
     )
@@ -742,7 +865,9 @@ samtools_flagstat_files = (
         .drop_duplicates()
         .apply(
             lambda ser: sel_expand(
-                    config['result_patterns']['se_bam_samtools_flagstats'], **ser
+                    config['result_patterns']['final_bam_samtools_flagstats'],
+                    **ser,
+                    alignment_combi=config['alignment_combi'],
             ),
             axis=1
     )
@@ -758,8 +883,8 @@ bismark_se_reports = (metadata_table[['protocol', 'entity', 'sample', 'lib', 'ui
 rule multiqc:
     input:
          samtools_stat_files,
-         bismark_se_reports,
-         fastqc_reports,
+         # bismark_se_reports,
+         # fastqc_reports,
          samtools_flagstat_files,
     output:
           report_html=multiqc_report_fp,
@@ -783,7 +908,7 @@ rule multiqc:
 
 rule fastqc:
     input:
-         unpack(find_fastqs),
+         unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
     output:
           qc_r1 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1'),
           fq_r1 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1').replace('_fastqc.zip', '.fastq.gz')),
@@ -815,4 +940,5 @@ rule fastqc:
          # fastqc_r2_fp = Path(params.output_dir).joinpath(Path(input.fq_r2).name.replace('.fastq.gz', '_fastqc.zip'))
          # fastqc_r1_fp.rename(output.qc_r1)
          # fastqc_r2_fp.rename(output.qc_r2)
+
 
