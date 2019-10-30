@@ -10,17 +10,23 @@ snakemake \
 --cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
 --keep-going \
---forcerun trim_reads_pe \
 --config \
-  experiment_name=scnmt-1 \
-  protocol=scnmt \
+  experiment_name=sctm-1 \
+  protocol=sctm \
   'entities=[
-    "lsk150_pr-hiera_ex-scnmt-1_cls-25"
+     "lsk150_pr-hiera_ex-sctm-1_cls-1",
   ]' \
-  upto=10000 \
+  'samples=["blood2"]' \
+  upto=100000 \
+--forcerun trim_reads_pe \
+
+--forcerun methyldackel_per_cytosine_per_motif \
 --dryrun \
 
 
+
+
+--forcerun trim_reads_pe \
 
 # scm
 --config \
@@ -31,7 +37,7 @@ snakemake \
   ]' \
   upto=10000 \
 
-# scmt
+# sctm
 --config \
   experiment_name=sctm-1 \
   protocol=sctm \
@@ -66,7 +72,7 @@ import re
 from pathlib import Path
 import pandas as pd
 from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
-from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet
+from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet, fp_to_pickle
 from functools import partial
 import smk_wgbs.tools
 
@@ -77,16 +83,17 @@ import smk_wgbs.tools
 # with open(config_yaml) as fin:
 #     config = yaml.load(fin, Loader=yaml.FullLoader)
 
-# Fill prefix with config_name and workflow_version
+# Fill prefix with alignment config_name and workflow_version
 results_prefix = sel_expand(
         config['results_prefix'],
-        config_name=config['name'],
+        config_name=config['alignment_config_name'],
         workflow_version=find_workflow_version()
 )
 
 # concatenate paths
 config['log_dir'] = os.path.join(config['results_dir'], results_prefix, config['log_dir'])
 for pattern_name, pattern in config['result_patterns'].items():
+    pattern = pattern.replace('{mcalling_config_name}', config['mcalling_config_name'])
     config['result_patterns'][pattern_name] = (
         os.path.join(config['results_dir'], results_prefix, pattern))
 
@@ -97,38 +104,21 @@ for pattern_name, pattern in config['result_patterns'].items():
 # The fastq_pattern is then used to create a metadata table with one column per field (using smk_wgbs.create_metadata_table_from_file_pattern).
 # The metadata table is placed at metadata_table_tsv (with a timestamp before the suffix)
 # without fastq_pattern: metadata table is read from metadata_table_tsv
+if config.get('fastq_pattern') and config.get('metadata_table_tsv'):
+    raise ValueError()
+
 if 'fastq_pattern' in config:
-    if 'entities' in config:
-        # create metadata table per entity, using only specified entities
-        metadata_table = pd.concat([
-            create_metadata_table_from_file_pattern(
-                    sel_expand(config['fastq_pattern'], entity=entity)).assign(entity=entity)
-            for entity in config['entities']], axis=0)
-    else:
-        raise NotImplementedError
-
-    # fill in optional pattern fields
-    if 'lib' not in metadata_table:
-        metadata_table['lib'] = '1'
-    if 'protocol' not in metadata_table:
-        metadata_table['protocol'] = config['protocol']
-
-    metadata_table = metadata_table.astype(str)
-
-    timestamp = time.strftime('%d-%m-%y_%H:%M:%S')
-    metadata_table_tsv = Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv')
-    Path(metadata_table_tsv).parent.mkdir(parents=True, exist_ok=True)
-    metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
-
-    # REMOVE
-    # metadata_table = metadata_table.iloc[0:10].copy()
-    # \REMOVE
-
-else:
-    metadata_table = pd.read_csv(config['metadata_table_tsv'], sep='\t', header=0, index=False)
+    metadata_table = smk_wgbs.tools.metadata_table_from_fastq_pattern(config)
+else:  # metadata_table_tsv given
+    metadata_table = pd.read_csv(
+            config['metadata_table_tsv'], sep='\t', header=0, index=False
+    )
 
 uid_columns = metadata_table.columns[
-    ~metadata_table.columns.isin(['entity', 'sample', 'read_number', 'path', 'lib', 'protocol'])]
+    ~metadata_table.columns.isin(
+            ['entity', 'sample', 'read_number', 'path', 'lib', 'protocol']
+    )
+]
 
 # add read pair UID field to metadata table
 metadata_table['uid'] = metadata_table[uid_columns].apply(
@@ -170,11 +160,12 @@ for _, row_ser in metadata_table.iterrows():
             patterns = [sel_expand(config['result_patterns']['cg_full_parquet'],
                                    alignment_combi=config['alignment_combi'])]
         else:
-            patterns = [sel_expand(config['result_patterns']['final_mcalls_merged_per_motif'],
-                                   alignment_combi=config['alignment_combi'])]
             if motif == 'CHH':
-                pass
+                patterns = [sel_expand(config['result_patterns']['final_mcalls_cytosines_per_motif'],
+                                   alignment_combi=config['alignment_combi'])]
             elif motif in ['CG', 'CHG']:
+                patterns = [sel_expand(config['result_patterns']['final_mcalls_merged_per_motif'],
+                                   alignment_combi=config['alignment_combi'])]
                 pairings = config['alignment_combi'].split('_')
                 for pairing in pairings:
                     patterns.append(
@@ -381,7 +372,6 @@ def find_atomic_bams_for_library(wildcards):
         wildcard_df = wildcard_df.drop_duplicates()
     ser = wildcard_df.apply(lambda ser: expand(atomic_bam_pattern, **ser)[0], axis=1)
     l = ser.to_list()
-    print(l)
     return l
 
 
@@ -528,6 +518,7 @@ def get_methyldackel_output_params(
                 bed,
                 bed.with_suffix('.bedGraph'),
                 bed.with_suffix('.parquet'),
+                bed.with_suffix('.p'),
                 temp(bed.parent.joinpath('{pairing}_{entity}_{sample}' + f'_{methyldackel_motif}.bedGraph')),
             ]
     motif_params_str = ' '.join(motif_params_l)
@@ -559,6 +550,7 @@ rule methyldackel_per_cytosine_per_motif:
           chromosomes = config['chromosomes'],
           motif_params = motif_params_str,
           sampling_options = '',
+          calling_options = config['methyldackel_options'],
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
@@ -588,6 +580,7 @@ rule methyldackel_per_cytosine_per_motif_sampled:
           chromosomes = config['chromosomes'],
           motif_params = motif_params_str,
           sampling_options = '-r 1:40000000-100000000',
+          calling_options = config['methyldackel_options'],
     # TODO: defaults for maxVariantFrac and minOppositeDepth
     threads: 4
     log:
@@ -604,6 +597,7 @@ rule methyldackel_merge_context:
         bed = config['result_patterns']['pe_or_se_mcalls_merged_per_motif'],
         bedgraph = fp_to_bedgraph(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
         parquet = fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
+        pickle = fp_to_pickle(config['result_patterns']['pe_or_se_mcalls_merged_per_motif'])
     params:
         chromosomes = config['chromosomes'],
         avg_mem = 8000,
@@ -628,7 +622,8 @@ rule methyldackel_merge_context:
                 bed=output.bed,
                 bedgraph=output.bedgraph,
                 chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True),
-                parquet=output.parquet
+                parquet=output.parquet,
+                pickle=output.pickle,
         )
 
 def find_merge_cytosine_level_calls_input(wildcards):
@@ -649,6 +644,7 @@ rule final_mcalls:
          bed = final_mcalls_cyt_bed,
          parquet = fp_to_parquet(final_mcalls_cyt_bed),
          bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
+         pickle = fp_to_pickle(final_mcalls_cyt_bed),
     params:
           avg_mem = 8000,
           max_mem = 12000,
@@ -665,7 +661,8 @@ rule final_mcalls_merged_motifs:
     output:
          bed = final_mcalls_merged_bed,
          bedgraph = fp_to_bedgraph(final_mcalls_merged_bed),
-         parquet = fp_to_parquet(final_mcalls_merged_bed)
+         parquet = fp_to_parquet(final_mcalls_merged_bed),
+         pickle = fp_to_pickle(final_mcalls_merged_bed),
     params:
           avg_mem = 2000,
           max_mem = 4000,
@@ -688,7 +685,8 @@ rule final_mcalls_merged_motifs:
                 bed=output.bed,
                 bedgraph=output.bedgraph,
                 chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True),
-                parquet=output.parquet
+                parquet=output.parquet,
+                pickle=output.pickle,
         )
 
 # ==========================================================================================
@@ -728,6 +726,12 @@ rule bismark_genome_preparation:
 # cutadapt speed up linear with cores
 # parallelization requires pigz python package to be installed (by default if bismark is installed via conda)
 
+cutadapt_phred_filter = config["cutadapt_phred_filter"]
+if config['illumina_machine'] == 'nextseq':
+    phred_filter_command = f'--nextseq-trim {cutadapt_phred_filter}'
+else:
+    phred_filter_command = f'-q {cutadapt_phred_filter}'
+
 rule trim_reads_pe:
     input:
         unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
@@ -743,7 +747,7 @@ rule trim_reads_pe:
           max_mem = 6000,
           name = 'trim_reads_{entity}_{sample}',
           walltime = '00:30',
-          phred_filter_command = '--nextseq-trim 10' if config['illumina_machine'] == 'nextseq' else '-q 10',
+          phred_filter_command = phred_filter_command,
     threads: 16
     # currently, do not trim random hexamers priming sites \
     # note that this anyway does not take care of priming sites at the end of short reads \
@@ -754,16 +758,13 @@ rule trim_reads_pe:
     shell:
          """
          cutadapt \
+         {config[cutadapt_options]} \
+         {params.phred_filter_command} \
          --cores {threads} \
-         -a AGATCGGAAGAGCG \
-         -A AGATCGGAAGAGCG \
+         -a {config[read1_adapter_seq]} \
+         -A {config[read2_adapter_seq]} \
          -o {output.fq_r1} \
          -p {output.fq_r2} \
-         {params.phred_filter_command} \
-         -u 6 \
-         -U 6 \
-         --minimum-length 30 \
-         --max-n 0.3 \
          --pair-filter=any \
          {input.fq_r1} \
          {input.fq_r2} \
@@ -893,7 +894,7 @@ rule multiqc:
           avg_mem = 5000,
           max_mem = 10000,
           walltime = '00:15',
-          name = f'multiqc_{config["name"]}',
+          name = f'multiqc_{config["alignment_config_name"]}',
     run:
         with open(output.file_list, 'wt') as fout:
             fout.write('\n'.join(input) + '\n')
@@ -906,39 +907,39 @@ rule multiqc:
         )
 
 
-rule fastqc:
-    input:
-         unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
-    output:
-          qc_r1 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1'),
-          fq_r1 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1').replace('_fastqc.zip', '.fastq.gz')),
-          qc_r2 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2'),
-          fq_r2 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2').replace('_fastqc.zip', '.fastq.gz')),
-    params:
-          output_dir = lambda wildcards, output: Path(output[0]).parent,
-          avg_mem = 2000,
-          max_mem = 4000,
-          walltime = '00:30',
-          name = 'fastqc',
-    threads: 2
-    # -c {input.adapter_sequences_tsv} \
-    run:
-        import os
-        from pathlib import Path
-        os.symlink(input.fq_r1, output.fq_r1)
-        os.symlink(input.fq_r2, output.fq_r2)
-        # -o {params.output_dir} \
-        shell(
-                """
-                fastqc \
-                --noextract \
-                --threads {threads} \
-                {output.fq_r1} {output.fq_r2}
-                """
-         )
-         # fastqc_r1_fp = Path(params.output_dir).joinpath(Path(input.fq_r1).name.replace('.fastq.gz', '_fastqc.zip'))
-         # fastqc_r2_fp = Path(params.output_dir).joinpath(Path(input.fq_r2).name.replace('.fastq.gz', '_fastqc.zip'))
-         # fastqc_r1_fp.rename(output.qc_r1)
-         # fastqc_r2_fp.rename(output.qc_r2)
+# rule fastqc:
+#     input:
+#          unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
+#     output:
+#           qc_r1 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1'),
+#           fq_r1 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='1').replace('_fastqc.zip', '.fastq.gz')),
+#           qc_r2 = sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2'),
+#           fq_r2 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2').replace('_fastqc.zip', '.fastq.gz')),
+#     params:
+#           output_dir = lambda wildcards, output: Path(output[0]).parent,
+#           avg_mem = 2000,
+#           max_mem = 4000,
+#           walltime = '00:30',
+#           name = 'fastqc',
+#     threads: 2
+#     # -c {input.adapter_sequences_tsv} \
+#     run:
+#         import os
+#         from pathlib import Path
+#         os.symlink(input.fq_r1, output.fq_r1)
+#         os.symlink(input.fq_r2, output.fq_r2)
+#         # -o {params.output_dir} \
+#         shell(
+#                 """
+#                 fastqc \
+#                 --noextract \
+#                 --threads {threads} \
+#                 {output.fq_r1} {output.fq_r2}
+#                 """
+#          )
+#          # fastqc_r1_fp = Path(params.output_dir).joinpath(Path(input.fq_r1).name.replace('.fastq.gz', '_fastqc.zip'))
+#          # fastqc_r2_fp = Path(params.output_dir).joinpath(Path(input.fq_r2).name.replace('.fastq.gz', '_fastqc.zip'))
+#          # fastqc_r1_fp.rename(output.qc_r1)
+#          # fastqc_r2_fp.rename(output.qc_r2)
 
 

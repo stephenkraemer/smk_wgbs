@@ -121,6 +121,10 @@ def fp_to_parquet(fp, suffix="bed"):
     return re.sub(f".{suffix}$", ".parquet", fp)
 
 
+def fp_to_pickle(fp, suffix='bed'):
+    return re.sub(f".{suffix}$", ".p", fp)
+
+
 def fp_to_bedgraph(fp, suffix="bed"):
     return re.sub(f".{suffix}$", ".bedGraph", fp)
 
@@ -200,6 +204,7 @@ def prepare_index_files():
         #     out_bed, sep="\t", index=False
         # )
         index_df.to_parquet(fp_to_parquet(out_bed))
+        index_df.to_pickle(fp_to_pickle(out_bed))
 
 
 def nome_filtering(input, output, params):
@@ -221,6 +226,44 @@ def nome_filtering(input, output, params):
     for chromosome in params.chromosomes:
         print("Chromosome", chromosome)
         print("CG merge")
+
+        # TEST
+
+        chrom_index = pd.read_csv(
+                nome_index_pattern.format(chromosome=chromosome),
+                columns=[
+                    "Chromosome",
+                    "Start",
+                    "End",
+                    "motif",
+                    "seq_context",
+                    "nome_seq_context",
+                ],
+        )
+
+        chrom_index = pd.read_pickle(
+                nome_index_pattern.format(chromosome=chromosome) + '.p',
+        )
+
+        chrom_index = pd.read_parquet(
+                nome_index_pattern.format(chromosome=chromosome),
+                columns=[
+                    "Chromosome",
+                    "Start",
+                    "End",
+                    "motif",
+                    "seq_context",
+                    "nome_seq_context",
+                ],
+                engine='pyarrow'
+        )
+
+
+
+
+
+        # /TEST
+
         chrom_index = pd.read_parquet(
             nome_index_pattern.format(chromosome=chromosome),
             columns=[
@@ -232,9 +275,15 @@ def nome_filtering(input, output, params):
                 "nome_seq_context",
             ],
         )
+
         cg_chrom_df = cg_df.loc[cg_df["Chromosome"] == chromosome]
+        assert cg_chrom_df['Chromosome'].eq(chromosome).all()
+        assert chrom_index['Chromosome'].eq(chromosome).all()
         cg_chrom_df_annotated = pd.merge(
-            cg_chrom_df, chrom_index.loc[chrom_index["motif"] == "CG"], how="inner"
+            cg_chrom_df,
+                chrom_index.loc[chrom_index["motif"] == "CG"],
+                on=['Start', 'End'],
+                how="left"
         )
         if cg_chrom_df.shape[0] != cg_chrom_df_annotated.shape[0]:
             print(
@@ -251,9 +300,28 @@ def nome_filtering(input, output, params):
             ],
             axis=0,
         ).sort_values(["Chromosome", "Start", "End"])
+        assert ch_chrom_df['Chromosome'].eq(chromosome).all()
+
+        # TEST
+        chrom_index = chrom_index.loc[chrom_index["motif"] != "CG"][['Start', 'End']].copy()
+        chrom_index['value'] = np.arange(len(chrom_index))
+        ch_chrom_df = ch_chrom_df.drop('Chromosome', axis=1)
+
         ch_chrom_df_annotated = pd.merge(
-            ch_chrom_df, chrom_index.loc[chrom_index["motif"] != "CG"], how="inner"
+                ch_chrom_df,
+                chrom_index.loc[chrom_index["motif"] != "CG"],
+                on=['Start', 'End'],
+                how='left',
         )
+        # \ TEST
+
+        ch_chrom_df_annotated = pd.merge(
+            ch_chrom_df,
+                chrom_index.loc[chrom_index["motif"] != "CG"],
+                on=['Start', 'End'],
+                how='left',
+        )
+
         if ch_chrom_df.shape[0] != ch_chrom_df_annotated.shape[0]:
             print(
                 f"WARNING: ch_calls {ch_chrom_df.shape[0]}, inner merge: {ch_chrom_df_annotated.shape[0]}"
@@ -291,13 +359,10 @@ def run_methyldackel(input, output, params, threads):
     subprocess.run(
         f"""
             MethylDackel extract \
-            --ignoreFlags 3840 \
-            --requireFlags 0 \
+            {params.calling_options} \
             {params.motif_params} \
             {params.sampling_options} \
             -o {params.prefix} \
-            -q 15 \
-            -p 15 \
             -@ {threads} \
             {input.ref_genome_unconverted} \
             {input.bam}
@@ -307,15 +372,15 @@ def run_methyldackel(input, output, params, threads):
 
     chrom_dtype = CategoricalDtype(categories=params.chromosomes, ordered=True)
 
-    assert len(output) % 4 == 0
+    assert len(output) % 5 == 0
     for i in range(int(len(output) / 4)):
-        bed, bedgraph, parquet, tmp_bedgraph = output[4 * i : (4 * i) + 4]
+        bed, bedgraph, parquet, pickle, tmp_bedgraph = output[5 * i : (5 * i) + 5]
         # convert bedgraph to bed and parquet
         shutil.copy(tmp_bedgraph, bedgraph)
-        methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet)
+        methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet, pickle)
 
 
-def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet):
+def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet, pickle):
     print("Create parquet and BED file")
     df = pd.read_csv(
         bedgraph,
@@ -330,7 +395,7 @@ def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet
     df["beta_value"] = df.eval("n_meth / n_total")
     # Add motif column
     # TODO: improve
-    if "CpG" in bed:
+    if "CG" in bed:
         motif = "CG"
     elif "CHG" in bed:
         motif = "CHG"
@@ -344,6 +409,7 @@ def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet
     # Save to BED and parquet
     df.to_csv(bed, sep="\t", header=True, index=False)
     df.rename(columns={"#Chromosome": "Chromosome"}).to_parquet(parquet)
+    df.rename(columns={"#Chromosome": "Chromosome"}).to_pickle(pickle)
     print("done")
 
 
@@ -366,10 +432,10 @@ def run_bismark_alignment(input, output, log, params, is_paired, upto=-1):
         unmapped_option = ""
         stem = re.sub(".fastq(.gz)?$", "", Path(input.fq).name)
     if upto > 0:
-        upto_option = f'--upto {upto}'
-        print(f'WARNING: only performing the first {upto} alignments')
+        upto_option = f"--upto {upto}"
+        print(f"WARNING: only performing the first {upto} alignments")
     else:
-        upto_option = ''
+        upto_option = ""
     subprocess.run(
         f"""
             bismark \
@@ -401,12 +467,15 @@ def run_bismark_alignment(input, output, log, params, is_paired, upto=-1):
     bismark_report_fp.rename(output.bismark_report)
     if is_paired:
 
-        bismark_unmapped_r1 = output_dir.joinpath(Path(input.fq_r1).name + "_unmapped_reads_1.fq.gz")
+        bismark_unmapped_r1 = output_dir.joinpath(
+            Path(input.fq_r1).name + "_unmapped_reads_1.fq.gz"
+        )
         bismark_unmapped_r1.rename(output.unmapped_fq1)
 
-        bismark_unmapped_r2 = output_dir.joinpath(Path(input.fq_r2).name + "_unmapped_reads_2.fq.gz")
+        bismark_unmapped_r2 = output_dir.joinpath(
+            Path(input.fq_r2).name + "_unmapped_reads_2.fq.gz"
+        )
         bismark_unmapped_r2.rename(output.unmapped_fq2)
-
 
 
 def merge_or_symlink(input, output):
@@ -436,33 +505,84 @@ def find_fastqs(wildcards, metadata_table):
 
 
 def merge_mcalls(input, output, wildcards):
+
     if len(input) == 1:
-        os.link(input.parquet, output.parquet)
-        os.link(input.bed, output.bed)
-        os.link(input.bedgraph, output.bedgraph)
+        input_parquet = Path(input[0])
+        os.link(input_parquet, output.parquet)
+        os.link(input_parquet.with_suffix('.bed'), output.bed)
+        os.link(input_parquet.with_suffix('.bedGraph'), output.bedgraph)
+        os.link(input_parquet.with_suffix('.p'), output.pickle)
         return
 
-    else:
-        assert len(input) == 2
-        df1 = pd.read_parquet(input[0])
-        assert df1["motif"].nunique() == 1
-        df2 = pd.read_parquet(input[1])
-        assert df2["motif"].nunique() == 1
-        res = pd.merge(df1, df2, on=["Chromosome", "Start", "End"])
-        res["n_meth"] = res["n_meth_x"] + res["n_meth_y"]
-        res["n_total"] = res["n_total_x"] + res["n_total_y"]
-        res["beta_value"] = res["n_meth"] / res["n_total"]
-        res["motif"] = res["motif_x"]
-        res = res[
-            ["Chromosome", "Start", "End", "motif", "beta_value", "n_total", "n_meth"]
-        ]
-        res.to_parquet(output.parquet)
-        res.rename(columns={"Chromosome": "#Chromosome"}).to_csv(
-            output.bed, sep="\t", header=True, index=False
+    assert len(input) == 2
+    df1 = pd.read_pickle(Path(input[0]).with_suffix('.p'))
+    assert df1["motif"].nunique() == 1
+    df2 = pd.read_pickle(Path(input[1]).with_suffix('.p'))
+    assert df2["motif"].nunique() == 1
+    # outer leads to lexicographic sort, which ignores categorical order as of 0.25.1
+    res = pd.merge(df1, df2, on=["Chromosome", "Start", "End"], how='outer')
+    res = res.sort_values(['Chromosome', 'Start', 'End'])
+    res["n_meth"] = res["n_meth_x"].add(res["n_meth_y"], fill_value=0)
+    res["n_total"] = res["n_total_x"].add(res["n_total_y"], fill_value=0)
+    res["beta_value"] = res["n_meth"] / res["n_total"]
+    res["motif"] = df1['motif'].iloc[0]
+    res = res[
+        ["Chromosome", "Start", "End", "motif", "beta_value", "n_total", "n_meth"]
+    ]
+    assert res.isna().sum().sum() == 0
+    res.to_parquet(output.parquet)
+    res.to_pickle(output.pickle)
+    res.rename(columns={"Chromosome": "#Chromosome"}).to_csv(
+        output.bed, sep="\t", header=True, index=False
+    )
+    res["n_unmeth"] = res["n_total"] - res["n_meth"]
+    with open(output.bedgraph, "wt") as fout:
+        fout.write(
+            f'track type="bedGraph" description="{wildcards.entity}_{wildcards.sample}"'
         )
-        res['n_unmeth'] = res['n_total'] - res['n_meth']
-        with open(output.bedgraph, 'wt') as fout:
-            fout.write(f'track type="bedGraph" description="{wildcards.entity}_{wildcards.sample}"')
-        res[["Chromosome", "Start", "End", "beta_value", "n_meth", "n_unmeth"]].to_csv(
-            output.bedgraph, mode='a', sep="\t", header=False, index=False
-        )
+    res[["Chromosome", "Start", "End", "beta_value", "n_meth", "n_unmeth"]].to_csv(
+        output.bedgraph, mode="a", sep="\t", header=False, index=False
+    )
+
+
+def metadata_table_from_fastq_pattern(config):
+    global_samples = config.get("samples", [])
+    metadata_tables = []
+    assert len(config["entities"]) > 0
+    for elem in config["entities"]:
+        if isinstance(elem, str):
+            entity = elem
+            samples = global_samples
+        else:
+            entity, *samples = elem
+
+        # create metadata table per entity, using only specified entities
+        if samples:
+            for sample in samples:
+                curr_metadata_table = create_metadata_table_from_file_pattern(
+                    sel_expand(config["fastq_pattern"], entity=entity, sample=sample)
+                ).assign(entity=entity, sample=sample)
+                metadata_tables.append(curr_metadata_table)
+        else:
+            curr_metadata_table = create_metadata_table_from_file_pattern(
+                sel_expand(config["fastq_pattern"], entity=entity)
+            ).assign(entity=entity)
+            metadata_tables.append(curr_metadata_table)
+
+    metadata_table = pd.concat(metadata_tables, axis=0)
+
+    # fill in optional pattern fields
+    if "lib" not in metadata_table:
+        metadata_table["lib"] = "1"
+    if "protocol" not in metadata_table:
+        metadata_table["protocol"] = config["protocol"]
+
+    metadata_table = metadata_table.astype(str)
+
+    # logging of metadata table not yet implemented
+    # timestamp = time.strftime('%d-%m-%y_%H:%M:%S')
+    # metadata_table_tsv = Path(config['metadata_table_tsv']).with_suffix(f'.{timestamp}.tsv')
+    # Path(metadata_table_tsv).parent.mkdir(parents=True, exist_ok=True)
+    # metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
+
+    return metadata_table
