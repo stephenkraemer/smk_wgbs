@@ -1,6 +1,8 @@
 alignment_config_name: default-params
 mcalling_config_name: default-params
 alignment_combi: 'SE_PE'
+#experiment_name: 'scnmt-1'
+#protocol: scnmt
 
 read1_adapter_seq: AGATCGGAAGAGCG
 read2_adapter_seq: AGATCGGAAGAGCG
@@ -49,7 +51,6 @@ metadata_table_tsv: ''
 fastq_pattern:
   /icgc/dkfzlsdf/project/mouse_hematopoiesis_PBAT/sequencing/whole_genome_bisulfite_tagmentation_sequencing/view-by-pid/{entity}/{sample}/paired/run{run}/sequence/AS-{asid}-LR-{lane}_R{read_number}.fastq.gz
 
-protocol: scnmt
 
 illumina_machine: 'nextseq'
 
@@ -73,10 +74,10 @@ protocol_config:
 # if fastq_pattern is used, the auto-constructed metadata table will only contain entries for the requested files.
 # [optional]
 entities:
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1
-  - [lsk150_pr-hiera_ex-scnmt-1_cls-0, blood1]
-  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
-  - lsk150_pr-hiera_ex-scnmt-1_cls-25
+  - [lsk150_pr-hiera_ex-scnmt-1_cls-1, blood1]
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-0
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-1_methneg
+#  - lsk150_pr-hiera_ex-scnmt-1_cls-25
 #  - lsk150_pr-hiera_ex-sctm-1_cls-0
 #  - lsk150_pr-hiera_ex-sctm-1_cls-1
 #  - lsk150_pr-hiera_ex-sctm-1_cls-25
@@ -134,15 +135,37 @@ genome_fa:
 results_dir:
   /icgc/dkfzlsdf/analysis/hs_ontogeny/results
 
+database_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/databases
+
+
 results_prefix:
   '{protocol}/results-per-entity/{entity}/{sample}/smk-wgbs/{config_name}_{workflow_version}'
 
 multiqc_by_experiment:
   '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/{protocol}/cohort-results/experiment-qc/{experiment}-multiqc.html'
 
-experiment_name:
-  'scnmt-1'
-#  'pilot-scM'
+database_patterns:
+  fastq_screen_index_dir:
+    smk-wgbs/reference-genomes/fastq-screen-indices/FastQ_Screen_Genomes_Bisulfite
+
+experiment_result_patterns:
+  meth_calling_exp_qc_coverage_long:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-long.p'
+  meth_calling_exp_qc_coverage_wide:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-wide.p'
+  meth_calling_exp_qc_global_meth:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_global-meth.p'
+  meth_calling_exp_qc_beta_value_dist:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_beta-value-dist.p'
+  meth_calling_exp_qc_coverage_dist:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-dist.p'
+  samtools_stats:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_samtools-stats.p'
+  multiqc_read_level:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_reads-multiqc.html'
+
+
 
 # [required]
 log_dir: logs
@@ -160,6 +183,8 @@ result_patterns:
     'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_unmapped.fastq.gz'
   fastq_fastqc:
     'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastqc.zip'
+  fastq_screen:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastq-screen'
 
 
   # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
@@ -168,6 +193,9 @@ result_patterns:
     'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_per-cytosine_{motif}{region}.bed'
   final_mcalls_merged_per_motif:
     'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_per-motif_{motif}{region}.bed'
+  meth_calling_qc_prefix:
+    'meth-calls/{mcalling_config_name}/meth-calls-qc/meth-calls-qc_{entity}_{sample}'
+
   pe_or_se_mcalls_cytosines_per_motif:
     'meth-calls/{mcalling_config_name}/partial-meth-calls/{pairing}_{entity}_{sample}_per-cytosine_{motif}{region}.bed'
   pe_or_se_mcalls_merged_per_motif:
@@ -218,3 +246,10 @@ result_patterns:
 chromosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",
               "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
               "X", "Y", "MT", "phix", "L"]
+
+chrom_regions:
+  Autosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",
+              "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+  PhiX: 'phix'
+  Lambda: 'L'
+  MT: 'MT'

@@ -1,4 +1,6 @@
 import glob
+from collections import defaultdict
+import pickle
 import itertools
 import os
 import re
@@ -6,10 +8,22 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict
+from snakemake.io import expand
 
 import pandas as pd
+import numpy as np
 from pandas.api.types import CategoricalDtype
 from pkg_resources import resource_filename
+
+
+def to_pickle(obj, fp, protocol=4):
+    with open(fp, "wb") as fout:
+        pickle.dump(obj, fout, protocol=protocol)
+
+
+def from_pickle(fp):
+    with open(fp, "rb") as fin:
+        return pickle.load(fin)
 
 
 def sel_expand(template, **kwargs):
@@ -121,7 +135,11 @@ def fp_to_parquet(fp, suffix="bed"):
     return re.sub(f".{suffix}$", ".parquet", fp)
 
 
-def fp_to_pickle(fp, suffix='bed'):
+def fp_to_tsv(fp, suffix="bed"):
+    return re.sub(f".{suffix}$", ".tsv", fp)
+
+
+def fp_to_pickle(fp, suffix="bed"):
     return re.sub(f".{suffix}$", ".p", fp)
 
 
@@ -230,37 +248,33 @@ def nome_filtering(input, output, params):
         # TEST
 
         chrom_index = pd.read_csv(
-                nome_index_pattern.format(chromosome=chromosome),
-                columns=[
-                    "Chromosome",
-                    "Start",
-                    "End",
-                    "motif",
-                    "seq_context",
-                    "nome_seq_context",
-                ],
+            nome_index_pattern.format(chromosome=chromosome),
+            columns=[
+                "Chromosome",
+                "Start",
+                "End",
+                "motif",
+                "seq_context",
+                "nome_seq_context",
+            ],
         )
 
         chrom_index = pd.read_pickle(
-                nome_index_pattern.format(chromosome=chromosome) + '.p',
+            nome_index_pattern.format(chromosome=chromosome) + ".p"
         )
 
         chrom_index = pd.read_parquet(
-                nome_index_pattern.format(chromosome=chromosome),
-                columns=[
-                    "Chromosome",
-                    "Start",
-                    "End",
-                    "motif",
-                    "seq_context",
-                    "nome_seq_context",
-                ],
-                engine='pyarrow'
+            nome_index_pattern.format(chromosome=chromosome),
+            columns=[
+                "Chromosome",
+                "Start",
+                "End",
+                "motif",
+                "seq_context",
+                "nome_seq_context",
+            ],
+            engine="pyarrow",
         )
-
-
-
-
 
         # /TEST
 
@@ -277,13 +291,13 @@ def nome_filtering(input, output, params):
         )
 
         cg_chrom_df = cg_df.loc[cg_df["Chromosome"] == chromosome]
-        assert cg_chrom_df['Chromosome'].eq(chromosome).all()
-        assert chrom_index['Chromosome'].eq(chromosome).all()
+        assert cg_chrom_df["Chromosome"].eq(chromosome).all()
+        assert chrom_index["Chromosome"].eq(chromosome).all()
         cg_chrom_df_annotated = pd.merge(
             cg_chrom_df,
-                chrom_index.loc[chrom_index["motif"] == "CG"],
-                on=['Start', 'End'],
-                how="left"
+            chrom_index.loc[chrom_index["motif"] == "CG"],
+            on=["Start", "End"],
+            how="left",
         )
         if cg_chrom_df.shape[0] != cg_chrom_df_annotated.shape[0]:
             print(
@@ -300,26 +314,28 @@ def nome_filtering(input, output, params):
             ],
             axis=0,
         ).sort_values(["Chromosome", "Start", "End"])
-        assert ch_chrom_df['Chromosome'].eq(chromosome).all()
+        assert ch_chrom_df["Chromosome"].eq(chromosome).all()
 
         # TEST
-        chrom_index = chrom_index.loc[chrom_index["motif"] != "CG"][['Start', 'End']].copy()
-        chrom_index['value'] = np.arange(len(chrom_index))
-        ch_chrom_df = ch_chrom_df.drop('Chromosome', axis=1)
+        chrom_index = chrom_index.loc[chrom_index["motif"] != "CG"][
+            ["Start", "End"]
+        ].copy()
+        chrom_index["value"] = np.arange(len(chrom_index))
+        ch_chrom_df = ch_chrom_df.drop("Chromosome", axis=1)
 
         ch_chrom_df_annotated = pd.merge(
-                ch_chrom_df,
-                chrom_index.loc[chrom_index["motif"] != "CG"],
-                on=['Start', 'End'],
-                how='left',
+            ch_chrom_df,
+            chrom_index.loc[chrom_index["motif"] != "CG"],
+            on=["Start", "End"],
+            how="left",
         )
         # \ TEST
 
         ch_chrom_df_annotated = pd.merge(
             ch_chrom_df,
-                chrom_index.loc[chrom_index["motif"] != "CG"],
-                on=['Start', 'End'],
-                how='left',
+            chrom_index.loc[chrom_index["motif"] != "CG"],
+            on=["Start", "End"],
+            how="left",
         )
 
         if ch_chrom_df.shape[0] != ch_chrom_df_annotated.shape[0]:
@@ -377,10 +393,14 @@ def run_methyldackel(input, output, params, threads):
         bed, bedgraph, parquet, pickle, tmp_bedgraph = output[5 * i : (5 * i) + 5]
         # convert bedgraph to bed and parquet
         shutil.copy(tmp_bedgraph, bedgraph)
-        methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet, pickle)
+        methyldackel_bedgraph_to_bed_and_parquet(
+            bed, bedgraph, chrom_dtype, parquet, pickle
+        )
 
 
-def methyldackel_bedgraph_to_bed_and_parquet(bed, bedgraph, chrom_dtype, parquet, pickle):
+def methyldackel_bedgraph_to_bed_and_parquet(
+    bed, bedgraph, chrom_dtype, parquet, pickle
+):
     print("Create parquet and BED file")
     df = pd.read_csv(
         bedgraph,
@@ -504,28 +524,43 @@ def find_fastqs(wildcards, metadata_table):
     return {"fq_r1": fastq_r1_ser.iloc[0], "fq_r2": fastq_r2_ser.iloc[0]}
 
 
+def find_individual_fastqs(wildcards, metadata_table):
+    df = metadata_table
+    is_in_selected_pair = (
+        (df["protocol"] == wildcards.protocol)
+        & (df["entity"] == wildcards.entity)
+        & (df["sample"] == wildcards.sample)
+        & (df["lib"] == wildcards.lib)
+        & (df["uid"] == wildcards.uid)
+        & (df["read_number"] == wildcards.read_number)
+    )
+    fastq_ser = df.loc[is_in_selected_pair, "path"]
+    assert fastq_ser.shape[0] == 1
+    return fastq_ser.iloc[0]
+
+
 def merge_mcalls(input, output, wildcards):
 
     if len(input) == 1:
         input_parquet = Path(input[0])
         os.link(input_parquet, output.parquet)
-        os.link(input_parquet.with_suffix('.bed'), output.bed)
-        os.link(input_parquet.with_suffix('.bedGraph'), output.bedgraph)
-        os.link(input_parquet.with_suffix('.p'), output.pickle)
+        os.link(input_parquet.with_suffix(".bed"), output.bed)
+        os.link(input_parquet.with_suffix(".bedGraph"), output.bedgraph)
+        os.link(input_parquet.with_suffix(".p"), output.pickle)
         return
 
     assert len(input) == 2
-    df1 = pd.read_pickle(Path(input[0]).with_suffix('.p'))
+    df1 = pd.read_pickle(Path(input[0]).with_suffix(".p"))
     assert df1["motif"].nunique() == 1
-    df2 = pd.read_pickle(Path(input[1]).with_suffix('.p'))
+    df2 = pd.read_pickle(Path(input[1]).with_suffix(".p"))
     assert df2["motif"].nunique() == 1
     # outer leads to lexicographic sort, which ignores categorical order as of 0.25.1
-    res = pd.merge(df1, df2, on=["Chromosome", "Start", "End"], how='outer')
-    res = res.sort_values(['Chromosome', 'Start', 'End'])
+    res = pd.merge(df1, df2, on=["Chromosome", "Start", "End"], how="outer")
+    res = res.sort_values(["Chromosome", "Start", "End"])
     res["n_meth"] = res["n_meth_x"].add(res["n_meth_y"], fill_value=0)
     res["n_total"] = res["n_total_x"].add(res["n_total_y"], fill_value=0)
     res["beta_value"] = res["n_meth"] / res["n_total"]
-    res["motif"] = df1['motif'].iloc[0]
+    res["motif"] = df1["motif"].iloc[0]
     res = res[
         ["Chromosome", "Start", "End", "motif", "beta_value", "n_total", "n_meth"]
     ]
@@ -586,3 +621,437 @@ def metadata_table_from_fastq_pattern(config):
     # metadata_table.to_csv(metadata_table_tsv, header=True, index=False, sep='\t')
 
     return metadata_table
+
+
+def test_meth_calling_qc_stats(config, sampling_name, wildcards, keys, names):
+
+    import yaml
+
+    config_yaml = get_demo_config_fp()
+    with open(config_yaml) as fin:
+        config = yaml.load(fin, Loader=yaml.FullLoader)
+    config["protocol"] = "sctm"
+
+    # Fill prefix with alignment config_name and workflow_version
+    results_prefix = sel_expand(
+        config["results_prefix"],
+        config_name=config["alignment_config_name"],
+        workflow_version=find_workflow_version(),
+    )
+
+    # concatenate paths
+    config["log_dir"] = os.path.join(
+        config["results_dir"], results_prefix, config["log_dir"]
+    )
+    for pattern_name, pattern in config["result_patterns"].items():
+        pattern = pattern.replace(
+            "{mcalling_config_name}", config["mcalling_config_name"]
+        )
+        config["result_patterns"][pattern_name] = os.path.join(
+            config["results_dir"], results_prefix, pattern
+        )
+
+    class wildcards:
+        entity = "lsk150_pr-hiera_ex-sctm-1_cls-1"
+        sample = "blood1"
+
+    sampling_name = "_unused"
+
+    metadata_table_with_wildcards = create_mcalls_metadata_table(config, sampling_name)
+    metadata_table = expand_mcalls_metadata_table(
+        metadata_table_with_wildcards, wildcards.entity, wildcards.sample
+    )
+    # print(metadata_table.fp.iloc[0])
+    compute_meth_calling_qc_stats(
+        metadata_table=metadata_table,
+        chrom_regions=config["chrom_regions"],
+        prefix="/home/kraemers/temp/test_f",
+        keys=[wildcards.entity, wildcards.sample],
+        names=["entity", "sample"],
+    )
+
+
+def create_mcalls_metadata_table(config, sampling_name):
+
+    # TODO-protocol
+    patterns = {
+        "SE": {
+            "merged": sel_expand(
+                config["result_patterns"]["pe_or_se_mcalls_merged_per_motif"],
+                pairing="SE",
+                protocol=config["protocol"],
+            ),
+            "single": sel_expand(
+                config["result_patterns"]["pe_or_se_mcalls_cytosines_per_motif"],
+                pairing="SE",
+                protocol=config["protocol"],
+            ),
+        },
+        "PE": {
+            "merged": sel_expand(
+                config["result_patterns"]["pe_or_se_mcalls_merged_per_motif"],
+                pairing="PE",
+                protocol=config["protocol"],
+            ),
+            "single": sel_expand(
+                config["result_patterns"]["pe_or_se_mcalls_cytosines_per_motif"],
+                pairing="PE",
+                protocol=config["protocol"],
+            ),
+        },
+        "SE_PE": {
+            "merged": sel_expand(
+                config["result_patterns"]["final_mcalls_merged_per_motif"],
+                protocol=config["protocol"],
+                alignment_combi="SE_PE",
+            ),
+            "single": sel_expand(
+                config["result_patterns"]["final_mcalls_cytosines_per_motif"],
+                protocol=config["protocol"],
+                alignment_combi="SE_PE",
+            ),
+        },
+    }
+    for alignment_mode, d1 in patterns.items():
+        for merge_mode, d2 in d1.items():
+            d1[merge_mode] = fp_to_pickle(d2)
+
+    alignment_combis = (
+        ["PE", "SE", "SE_PE"]
+        if config["alignment_combi"] == "SE_PE"
+        else [config["alignment_combi"]]
+    )
+    input_rows = []
+    for alignment_mode in alignment_combis:
+        for motif, user_request in config["protocol_config"][config["protocol"]][
+            "motifs"
+        ].items():
+            if not user_request:
+                continue
+            if user_request == "full":
+                region_str = ""
+            else:
+                region_str = sampling_name
+            for merging_mode in ["merged", "single"]:
+                if merging_mode == "merged" and motif == "CHH":
+                    continue
+                input_rows.append(
+                    dict(
+                        pairing=alignment_mode,
+                        merging_mode=merging_mode,
+                        motif=motif,
+                        fp=sel_expand(
+                            patterns[alignment_mode][merging_mode],
+                            motif=motif,
+                            region=region_str,
+                        ),
+                    )
+                )
+    metadata_table = pd.DataFrame(input_rows)
+
+    return metadata_table
+
+
+def expand_mcalls_metadata_table(metadata_table, entity, sample):
+    metadata_table = metadata_table.copy()
+    metadata_table["fp"] = metadata_table["fp"].apply(
+        lambda fp: expand(fp, entity=entity, sample=sample)[0]
+    )
+    return metadata_table
+
+
+def save_df(df, out_p, keys, names, add_as="data"):
+    df = df.copy()
+    if add_as == "data":
+        data_cols = df.columns.to_list()
+        for name, key in zip(names, keys):
+            df[name] = key
+        df = df[names + data_cols]
+    elif add_as == "index":
+        df = pd.concat([df], keys=[tuple(keys)], names=names)
+    else:
+        raise ValueError
+    df.to_pickle(out_p)
+    df.to_csv(fp_to_tsv(out_p, "p"), sep="\t", header=True, index=False)
+    df.columns = df.columns.astype(str)
+    df.to_parquet(fp_to_parquet(out_p, "p"))
+
+
+def compute_meth_calling_qc_stats(metadata_table, chrom_regions, prefix, keys, names):
+    coverage_df_rows = []
+    beta_value_dist_index_keys = []
+    metadata_field_names = metadata_table.columns[0:-1].to_list()
+    beta_value_dist_index_names = metadata_field_names + "is_corrected region".split()
+    beta_value_dist_dfs = []
+    global_meth_df_rows = []
+    coverage_dist_dfs = []
+    coverage_dist_index_keys = []
+    coverage_dist_index_names = metadata_field_names + ["region"]
+    for _unused, row_ser in metadata_table.iterrows():
+        metadata_ser = row_ser.drop("fp")
+        df = pd.read_pickle(row_ser["fp"])
+
+        coverage_df_rows.append(
+            dict(**metadata_ser, region="global", n_covered=df.shape[0])
+        )
+
+        df["n_total_capped"] = df["n_total"].mask(lambda ser: ser.gt(30), 30)
+        coverage_dist_dfs.append(
+            df["n_total_capped"]
+            .value_counts()
+            .reindex(np.arange(1, 31))
+            .to_frame("frequency")
+            .rename_axis("n_total")
+        )
+        coverage_dist_index_keys.append((*metadata_ser.to_list(), "global"))
+
+        for region_name, chrom_or_chroms in chrom_regions.items():
+            if isinstance(chrom_or_chroms, str):
+                chrom_df = df.query("Chromosome == @chrom_or_chroms").copy()
+            else:
+                chrom_df = df.query("Chromosome in @chrom_or_chroms").copy()
+            chrom_df["beta_value_corrected"] = chrom_df["beta_value"].mask(
+                lambda ser: ser.between(0, 1, inclusive=False)
+            )
+            for is_corrected, beta_value_col in zip(
+                [False, True], ["beta_value", "beta_value_corrected"]
+            ):
+                if chrom_df.empty:
+                    if isinstance(chrom_or_chroms, str):
+                        assert chrom_or_chroms in df["Chromosome"].cat.categories
+                    else:
+                        for c in chrom_or_chroms:
+                            assert c in df["Chromosomes"].cat.categories
+                    continue
+                # print(region_name, chrom_or_chroms, beta_value_col)
+                beta_value_dist_dfs.append(
+                    pd.cut(
+                        chrom_df[beta_value_col],
+                        bins=np.linspace(0, 1.01, 102),
+                        right=False,
+                        include_lowest=False,
+                    )
+                    .value_counts()
+                    .sort_index()
+                    .to_frame("frequency")
+                    .T
+                )
+                beta_value_dist_index_keys.append(
+                    (*metadata_ser.to_list(), is_corrected, region_name)
+                )
+
+                if is_corrected:
+                    n_meth = chrom_df[beta_value_col].eq(1).sum()
+                    n_total = chrom_df[beta_value_col].notnull().sum()
+                else:
+                    n_meth = chrom_df["n_meth"].sum()
+                    n_total = chrom_df["n_total"].sum()
+                beta_value = n_meth / n_total
+                n_intermediate_beta = (
+                    chrom_df[beta_value_col].between(0, 1, inclusive=False).sum()
+                )
+
+                global_meth_df_rows.append(
+                    dict(
+                        **metadata_ser,
+                        region=region_name,
+                        is_corrected=is_corrected,
+                        n_meth=n_meth,
+                        n_total=n_total,
+                        n_intermediate_beta=n_intermediate_beta,
+                        beta_value=beta_value,
+                    )
+                )
+
+    coverage_df = pd.DataFrame(coverage_df_rows)
+    merge_motifs_groupby_cols = metadata_table.columns.drop(
+        ["motif", "fp"]
+    ).to_list() + ["region"]
+    new = (
+        coverage_df.query("not merging_mode == 'merged'")
+        .groupby(merge_motifs_groupby_cols)
+        .sum()
+        .assign(motif="C")
+        .reset_index()
+    )
+    coverage_df = pd.concat([coverage_df, new], sort=False).reset_index(drop=True)
+    save_df(coverage_df, prefix + "_coverage-long.p", keys=keys, names=names)
+
+    coverage_df_wide = (
+        coverage_df.pivot_table(
+            index=coverage_df.columns.drop(["pairing", "n_covered"]).to_list(),
+            columns=["pairing"],
+            values="n_covered",
+        )
+        .assign(
+            overlap=lambda df: df.eval("SE + PE - SE_PE"),
+            overlap_perc=lambda df: df.eval("overlap / SE_PE"),
+        )
+        .reset_index()
+    )
+    save_df(coverage_df_wide, prefix + "_coverage-wide.p", keys=keys, names=names)
+
+    global_meth_df = pd.DataFrame(global_meth_df_rows)
+    save_df(global_meth_df, prefix + "_global-meth.p", keys=keys, names=names)
+
+    beta_value_dist_df = pd.concat(
+        beta_value_dist_dfs,
+        keys=beta_value_dist_index_keys,
+        names=beta_value_dist_index_names,
+    )
+    beta_value_dist_df.index = beta_value_dist_df.index.droplevel(-1)
+    save_df(
+        beta_value_dist_df,
+        prefix + "_beta-value-dist.p",
+        keys=keys,
+        names=names,
+        add_as="index",
+    )
+
+    motif_coverage_dist_df = pd.concat(
+        coverage_dist_dfs,
+        keys=coverage_dist_index_keys,
+        names=coverage_dist_index_names,
+    )
+    merge_motifs_groupby_cols = metadata_table.columns.drop(
+        ["motif", "fp"]
+    ).to_list() + ["region", "n_total"]
+    agg_motifs_coverage_df = pd.concat(
+        [motif_coverage_dist_df.groupby(merge_motifs_groupby_cols).sum()],
+        keys=["C"],
+        names=["motif"],
+    )
+    coverage_dist_df = pd.concat(
+        [motif_coverage_dist_df.reset_index(), agg_motifs_coverage_df.reset_index()],
+        sort=False,
+    ).reset_index(drop=True)
+    save_df(coverage_dist_df, prefix + "_coverage-dist.p", keys=keys, names=names)
+
+
+def concat_meth_calling_qc_data(metadata_table, prefix, output):
+    metadata_table = metadata_table[["entity", "sample"]].drop_duplicates()
+
+    def concat_and_save(suffix, out_p):
+        print(suffix)
+        print(out_p)
+        fps_ser = metadata_table.apply(
+            lambda ser: expand(prefix + suffix, **ser)[0], axis=1
+        )
+        concat_df = pd.concat([pd.read_pickle(fp) for fp in fps_ser])
+        concat_df.to_pickle(out_p)
+        concat_df.to_csv(fp_to_tsv(out_p, "p"), sep="\t", header=True, index=False)
+        concat_df.columns = concat_df.columns.astype(str)
+        concat_df.to_parquet(fp_to_parquet(out_p, "p"))
+
+    concat_and_save("_coverage-long.p", output.meth_calling_exp_qc_coverage_long)
+    concat_and_save("_coverage-wide.p", output.meth_calling_exp_qc_coverage_wide)
+    concat_and_save("_global-meth.p", output.meth_calling_exp_qc_global_meth)
+    concat_and_save("_beta-value-dist.p", output.meth_calling_exp_qc_beta_value_dist)
+    concat_and_save("_coverage-dist.p", output.meth_calling_exp_qc_coverage_dist)
+
+
+def fn():
+
+    import seaborn as sns
+    import pandas as pd
+
+    coverage_long_p = "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/cohort-results/experiment-qc/sctm-1-meth-calling-qc_coverage-long.p"
+    coverage_wide_p = "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/cohort-results/experiment-qc/sctm-1-meth-calling-qc_coverage-wide.p"
+    global_meth_p = "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/cohort-results/experiment-qc/sctm-1-meth-calling-qc_global-meth.p"
+    beta_dist_p = "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/cohort-results/experiment-qc/sctm-1-meth-calling-qc_beta-value-dist.p"
+    coverage_dist_p = "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/cohort-results/experiment-qc/sctm-1-meth-calling-qc_coverage-dist.p"
+
+    # DF // 'alignment_config_name', 'mcalling_config_name', 'entity', 'sample',
+    #        'pairing', 'merging_mode', 'motif', 'region', 'n_covered'
+    coverage_long_df = pd.read_pickle(coverage_long_p)
+
+    # DF // 'alignment_config_name', 'mcalling_config_name', 'entity', 'sample',
+    #        'merging_mode', 'motif', 'region', 'PE', 'SE', 'SE_PE', 'overlap',
+    #        'overlap_perc'
+    coverage_wide_df = pd.read_pickle(coverage_wide_p)
+
+    global_meth_df = pd.read_pickle(global_meth_p)
+    beta_dist_df = pd.read_pickle(beta_dist_p)
+    coverage_dist_p = pd.read_pickle(coverage_dist_p)
+
+
+def parse_samtools_stats(fp, keys):
+
+    stats_in = defaultdict(list)
+    with open(fp) as fin:
+        for line in fin:
+            if line.startswith("#"):
+                continue
+            fields = line.strip().split("\t")
+            stats_in[fields[0]].append(fields[1:])
+    dfs = {
+        "IS": {
+            "columns": [
+                "insert_size",
+                "pairs_total",
+                "inward_oriented_pairs",
+                "outward_oriented_pairs",
+                "other_pairs",
+            ],
+            "key": "insert_size",
+        }
+    }
+    stats_out = {}
+    summary_stats_l = stats_in.pop("SN")
+
+    df = (
+        pd.DataFrame(
+            [
+                (name[:-1], int(n) if "." not in n else float(n))
+                for (name, n, *comment) in summary_stats_l
+            ],
+            columns=["name", "count"],
+        )
+        .assign(**keys)[list(keys.keys()) + ["name", "count"]]
+        .pivot_table(index=list(keys.keys()), columns="name", values="count")
+        .reset_index(drop=False)
+    )
+    df.columns.name = None
+
+    stats_out["summary_stats"] = df
+
+    for k, v in stats_in.items():
+        stat_df = pd.DataFrame(v)
+        if k in dfs:
+            stat_df.columns = dfs[k]["columns"]
+            stat_name = dfs[k]["key"]
+        else:
+            stat_name = k
+        orig_cols = stat_df.columns.to_list()
+        stat_df = stat_df.assign(**keys)[list(keys.keys()) + orig_cols]
+        stats_out[stat_name] = stat_df
+
+    return stats_out
+
+
+def collect_samtools_stats(input_fps, output_p, keys, metadata_table):
+    stats = defaultdict(list)
+    for fp, (_, row_ser) in zip(
+        input_fps, metadata_table[["entity", "sample"]].iterrows()
+    ):
+        curr_stats = parse_samtools_stats(fp, dict(**keys, **row_ser.to_dict()))
+        for k, v in curr_stats.items():
+            stats[k].append(v)
+    for k, v in stats.items():
+        stats[k] = pd.concat(v)
+    to_pickle(stats, output_p)
+
+
+def test_collect_samtools_stats():
+
+    metadata_table = pd.DataFrame({"entity": "entA", "sample": ["a", "b"]})
+
+    collect_samtools_stats(
+        input_fps=[
+            "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/results-per-entity/lsk150_pr-hiera_ex-sctm-1_cls-1/blood1/smk-wgbs/default-params_v0.1.0/alignments/lsk150_pr-hiera_ex-sctm-1_cls-1_blood1_SE_PE_samtools-stats.txt",
+            "/icgc/dkfzlsdf/analysis/hs_ontogeny/results/sctm/results-per-entity/lsk150_pr-hiera_ex-sctm-1_cls-1/blood2/smk-wgbs/default-params_v0.1.0/alignments/lsk150_pr-hiera_ex-sctm-1_cls-1_blood2_SE_PE_samtools-stats.txt",
+        ],
+        output_p="/home/kraemers/temp/test.p",
+        keys=dict(e="exp1", a="al1", m="meth1"),
+        metadata_table=metadata_table,
+    )

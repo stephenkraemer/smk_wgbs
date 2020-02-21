@@ -66,12 +66,11 @@ snakemake \
 
 """
 
-import time
 import os
 import re
 from pathlib import Path
 import pandas as pd
-from smk_wgbs import create_metadata_table_from_file_pattern, sel_expand, find_workflow_version
+from smk_wgbs import sel_expand, find_workflow_version
 from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet, fp_to_pickle
 from functools import partial
 import smk_wgbs.tools
@@ -79,7 +78,7 @@ import smk_wgbs.tools
 
 # For development
 # import yaml
-# config_yaml = '/home/kraemers/projects/smk_wgbs/doc/demo_config.yaml'
+# config_yaml = '/home/kraemers/projects/smk_wgbs/smk_wgbs/demo_config.yaml'
 # with open(config_yaml) as fin:
 #     config = yaml.load(fin, Loader=yaml.FullLoader)
 
@@ -91,11 +90,34 @@ results_prefix = sel_expand(
 )
 
 # concatenate paths
+# results per pid
 config['log_dir'] = os.path.join(config['results_dir'], results_prefix, config['log_dir'])
 for pattern_name, pattern in config['result_patterns'].items():
     pattern = pattern.replace('{mcalling_config_name}', config['mcalling_config_name'])
     config['result_patterns'][pattern_name] = (
         os.path.join(config['results_dir'], results_prefix, pattern))
+
+# results per experiment
+for pattern_name, pattern in config['experiment_result_patterns'].items():
+    config['experiment_result_patterns'][pattern_name] = (
+        os.path.join(
+                config['results_dir'],
+                expand(
+                        pattern,
+                        protocol=config['protocol'],
+                        experiment=config['experiment_name'],
+                        alignment_config_name=config['alignment_config_name'],
+                        mcalling_config_name=config['mcalling_config_name'],
+                )[0]
+        )
+    )
+
+# databases
+for pattern_name, pattern in config['database_patterns'].items():
+    config['database_patterns'][pattern_name] = (
+        os.path.join(config['database_dir'], pattern))
+
+
 
 # Prepare metadata table and adjust uid fields
 # ======================================================================
@@ -183,11 +205,10 @@ for _, row_ser in metadata_table.iterrows():
                     motif=motif,
                     region=region,
             ))
-print(sorted(targets), sep='\n')
+# print(sorted(targets), sep='\n')
 multiqc_report_fp = sel_expand(config['multiqc_by_experiment'],
                                protocol=config['protocol'],
                                experiment=config['experiment_name'])
-
 
 fastqc_reports = (
     metadata_table[['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
@@ -195,10 +216,27 @@ fastqc_reports = (
 )
 
 
+fastq_screen_dirs = (
+    metadata_table[['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
+        .apply(lambda ser: expand(config['result_patterns']['fastq_screen'], **ser)[0], axis=1)
+)
+
+# untrimmed
+def get_fastq_screen_txt_fp(row_ser):
+    wildcards = row_ser[['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']]
+    out_dir = expand(config['result_patterns']['fastq_screen'], **wildcards)[0]
+    fastq_stem = os.path.basename(row_ser['path']).replace('.fastq.gz', '')
+    return out_dir + f'/{fastq_stem}_screen.txt'
+fastq_screen_txts_untrimmed = metadata_table.apply(get_fastq_screen_txt_fp, axis=1)
+
 rule all:
     input:
          targets,
          multiqc_report_fp,
+         list(config['experiment_result_patterns'].values()),
+         # config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
+         # fastq_screen_dirs,
+         # config['experiment_result_patterns']['multiqc_read_level'],
          # fastqc_reports,
 
 # SE Alignment
@@ -827,8 +865,8 @@ rule samtools_stats:
          samtools stats \
          --insert-size 3000 \
          --ref-seq {input.ref_genome_unconverted} \
-         --remove-dups \
-         {input.bam} > {output[0]}
+         {input.bam} \
+         > {output[0]}
          """
 
 
@@ -906,6 +944,216 @@ rule multiqc:
               """
         )
 
+
+fastq_screen_txts_trimmed = metadata_table[
+    ['protocol', 'entity', 'sample', 'lib', 'uid', 'read_number']
+].apply(
+        lambda ser: (
+            expand(config['result_patterns']['fastq_screen'], **ser)[0]
+            + '/'
+            + os.path.basename(expand(config['result_patterns']['trimmed_fastq'], **ser)[0])
+              .replace('.fastq.gz', '_screen.txt'),
+        ),
+        axis=1
+).to_list()
+rule multiqc_read_level:
+    input:
+         # fastqc_reports,
+         fastq_screen_txts_trimmed,
+    output:
+          report_html=config['experiment_result_patterns']['multiqc_read_level'],
+          file_list= config['experiment_result_patterns']['multiqc_read_level'] + '_file-list.txt',
+    params:
+          avg_mem = 2000,
+          max_mem = 3000,
+          walltime = '00:15',
+          name = f'multiqc_{config["alignment_config_name"]}_read-level',
+    run:
+        with open(output.file_list, 'wt') as fout:
+            fout.write('\n'.join(input) + '\n')
+        shell(f"""
+              multiqc \
+              --filename {output.report_html} \
+              --force \
+              --file-list {output.file_list}
+              """
+              )
+
+
+meth_calling_qc_metadata_table = smk_wgbs.tools.create_mcalls_metadata_table(
+        config, sampling_name
+)
+
+
+# TODO-protocol
+mcalling_qc_report_done_files = (
+    metadata_table[['entity', 'sample']]
+        .drop_duplicates()
+        .apply(lambda ser: expand(
+            config['result_patterns']['meth_calling_qc_prefix'] + '.qc-done',
+            **ser,
+            protocol=config['protocol'],
+            )[0],
+               axis=1
+               )
+        .to_list()
+)
+
+
+rule meth_calling_qc:
+    input:
+        meth_calling_qc_metadata_table['fp'].to_list()
+    output:
+        done = touch(config['result_patterns']['meth_calling_qc_prefix'] + '.qc-done'),
+    params:
+        metadata_table_expanded = lambda wildcards: smk_wgbs.tools.expand_mcalls_metadata_table(
+                meth_calling_qc_metadata_table,
+                entity=wildcards.entity,
+                sample=wildcards.sample
+        ),
+        prefix=config['result_patterns']['meth_calling_qc_prefix'],
+        avg_mem=8000,
+        max_mem=8000,
+        walltime='00:10',
+        name = 'mcalling_qc_{entity}_{sample}',
+    run:
+        smk_wgbs.tools.compute_meth_calling_qc_stats(
+                metadata_table=params.metadata_table_expanded,
+                chrom_regions=config['chrom_regions'],
+                prefix=params.prefix,
+                keys=[
+                    config['experiment_name'],
+                    config['alignment_config_name'],
+                    config['mcalling_config_name'],
+                    wildcards.entity,
+                    wildcards.sample
+                ],
+                names=[
+                    'experiment_name',
+                    'alignment_config_name',
+                    'mcalling_config_name',
+                    'entity',
+                    'sample'
+                ]
+        )
+
+
+rule concat_meth_calling_qc_data:
+    input:
+        mcalling_qc_report_done_files
+    output:
+        **{k: v for k, v in config['experiment_result_patterns'].items()
+         if k.startswith('meth_calling')}
+    params:
+          # TODO-protocol
+          # Protect against expansion attempt for entity and sample
+          prefix=lambda wildcards: sel_expand(
+                  config['result_patterns']['meth_calling_qc_prefix'],
+                  protocol=config['protocol']),
+          avg_mem=16000,
+          max_mem=20000,
+          walltime='00:20',
+          name = 'concat_meth_calling_qc_data',
+    run:
+        smk_wgbs.tools.concat_meth_calling_qc_data(
+                metadata_table, params.prefix, output
+        )
+
+
+# TODO-protocol
+samtools_stats_files = (
+    metadata_table[['entity', 'sample']]
+        .drop_duplicates()
+        .apply(lambda ser: expand(
+            config['result_patterns']['final_bam_samtools_stats'],
+            **ser,
+            protocol=config['protocol'],
+            alignment_combi=config['alignment_combi'],
+            )[0],
+               axis=1
+               )
+        .to_list()
+)
+
+
+rule collect_samtools_stats:
+    input:
+        samtools_stats_files,
+    output:
+        config['experiment_result_patterns']['samtools_stats']
+    params:
+          avg_mem=4000,
+          max_mem=5000,
+          walltime='00:20',
+          name = 'collect_samtools_stats',
+    run:
+        smk_wgbs.tools.collect_samtools_stats(
+                input_fps=input,
+                output_p=output[0],
+                keys=dict(experiment_name = config['experiment_name'],
+                          alignment_config_name=config['alignment_config_name']),
+                metadata_table=metadata_table,
+        )
+
+
+# TODO: can I rely on snakemake creating the folder for the done file
+#   before executing the rule, so that fastq_screen can place files in this folder?
+rule download_fastq_screen_indices:
+    output:
+        fastq_screen_index_conf = config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
+    params:
+        outdir=os.path.dirname(config['database_patterns']['fastq_screen_index_dir']),
+        avg_mem = 4000,
+        max_mem = 4000,
+        walltime = '02:00',
+        name = 'fastq-screen_get-genomes'
+    shell:
+        """
+        if [ -d "{params.outdir}/FastQ_Screen_Genomes_Bisulfite" ]; then
+            rm -r {params.outdir}/FastQ_Screen_Genomes_Bisulfite
+        fi
+        fastq_screen \
+        --bisulfite \
+        --get_genomes \
+        --outdir {params.outdir}
+        """
+
+# TODO: conf file had to be manually edited and we use the copy in the smk repo for now
+#    the fastq_screen.conf file on the fastq server is not correct currently (obviously a development version)
+
+rule fastq_screen:
+    input:
+         # raw
+         # fq = partial(smk_wgbs.tools.find_individual_fastqs, metadata_table=metadata_table),
+         # trimmed
+         fq = config['result_patterns']['trimmed_fastq'],
+         fastq_screen_index_conf = config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
+    output:
+        txt = config['result_patterns']['fastq_screen'] + '/{fastq_stem}_screen.txt'
+    threads: 6
+    params:
+        avg_mem = 16000,
+        max_mem = 17000,
+        walltime = '00:45',
+        name = 'fastq-screen',
+        outdir = lambda wildcards, output: os.path.dirname(output.txt)
+    # --bowtie2 '--trim5 6' \
+    # threads is ignored, put number of threads for one bismark run
+    #   --threads {threads} \
+    shell:
+        """
+        mkdir -p {params.outdir}/fastq-screen-tmp-files
+        cd {params.outdir}/fastq-screen-tmp-files
+        fastq_screen \
+        --aligner bowtie2 \
+        --bisulfite \
+        --conf /home/kraemers/projects/smk_wgbs/smk_wgbs/fastq_screen.conf \
+        --force \
+        --nohits \
+        --outdir {params.outdir} \
+        --subset 100000 \
+        {input.fq}
+        """
 
 # rule fastqc:
 #     input:
