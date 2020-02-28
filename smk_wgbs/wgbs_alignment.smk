@@ -1180,9 +1180,11 @@ rule concat_meth_calling_qc_data:
 
 
 # TODO-protocol
+# for each individual sample, ie unique (entity, sample), we take the final bam
+# for samtools stats computation
+unique_entity_sample_df = metadata_table[['entity', 'sample']].drop_duplicates()
 samtools_stats_files = (
-    metadata_table[['entity', 'sample']]
-        .drop_duplicates()
+        unique_entity_sample_df
         .apply(lambda ser: expand(
             config['result_patterns']['final_bam_samtools_stats'],
             **ser,
@@ -1193,7 +1195,6 @@ samtools_stats_files = (
                )
         .to_list()
 )
-
 
 rule collect_samtools_stats:
     input:
@@ -1214,7 +1215,7 @@ rule collect_samtools_stats:
                 output_p=output[0],
                 keys=dict(experiment_name = config['experiment_name'],
                           alignment_config_name=config['alignment_config_name']),
-                metadata_table=metadata_table,
+                unique_entity_sample_df=unique_entity_sample_df,
         )
 
 

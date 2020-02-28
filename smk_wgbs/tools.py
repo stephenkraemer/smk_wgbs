@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from snakemake.io import expand
 
 import pandas as pd
@@ -722,6 +722,7 @@ def create_mcalls_metadata_table(config, sampling_name):
         if config["alignment_combi"] == "SE_PE"
         else [config["alignment_combi"]]
     )
+
     input_rows = []
     for alignment_mode in alignment_combis:
         for motif, user_request in config["protocol_config"][config["protocol"]][
@@ -976,7 +977,7 @@ def fn():
     coverage_dist_p = pd.read_pickle(coverage_dist_p)
 
 
-def parse_samtools_stats(fp, keys):
+def parse_samtools_stats(fp: str, keys: Dict[str, str]) -> Dict:
 
     stats_in = defaultdict(list)
     with open(fp) as fin:
@@ -1008,6 +1009,7 @@ def parse_samtools_stats(fp, keys):
             ],
             columns=["name", "count"],
         )
+        # add keys dict: column name -> value as index columns
         .assign(**keys)[list(keys.keys()) + ["name", "count"]]
         .pivot_table(index=list(keys.keys()), columns="name", values="count")
         .reset_index(drop=False)
@@ -1030,11 +1032,29 @@ def parse_samtools_stats(fp, keys):
     return stats_out
 
 
-def collect_samtools_stats(input_fps, output_p, keys, metadata_table):
+def collect_samtools_stats(
+    input_fps: List[str],
+    output_p: str,
+    keys: Dict[str, str],
+    unique_entity_sample_df: pd.DataFrame,
+) -> None:
+    """ Collect samtools stats
+
+    Parameters
+    ----------
+    input_fps: paths to individual samtools stats results files, one per (entity, sample)
+    output_p: for serialized result
+    keys: dict with global metadata: column name -> value.
+          these metadata will be added as index columns to the result dataframes
+    unique_entity_sample_df: dataframe with columns 'entity', 'sample'; must be aligned with
+        order of input_fps
+    """
+    assert unique_entity_sample_df.columns.to_list() == ["entity", "sample"]
     stats = defaultdict(list)
-    for fp, (_, row_ser) in zip(
-        input_fps, metadata_table[["entity", "sample"]].iterrows()
-    ):
+    for fp, (_, row_ser) in zip(input_fps, unique_entity_sample_df.iterrows()):
+        # pass both global metadata (keys) and input file specific metadata
+        # (entity, sample) from row_ser to parser. All these infos will be added as index
+        # columns to curr_stats
         curr_stats = parse_samtools_stats(fp, dict(**keys, **row_ser.to_dict()))
         for k, v in curr_stats.items():
             stats[k].append(v)
@@ -1054,12 +1074,10 @@ def test_collect_samtools_stats():
         ],
         output_p="/home/kraemers/temp/test.p",
         keys=dict(e="exp1", a="al1", m="meth1"),
-        metadata_table=metadata_table,
+        unique_entity_sample_df=metadata_table,
     )
 
 
 def abort_on_nth_attempt(attempt: int, max_attempts: int):
     if attempt >= max_attempts:
         sys.exit(1)
-
-
