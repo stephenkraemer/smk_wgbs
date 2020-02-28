@@ -7,7 +7,7 @@ snakemake \
 --snakefile $(smk_wgbs_snakefile) \
 --latency-wait 60 \
 --configfile $(smk_wgbs_demo_config) \
---cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.max_mem} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
+--cluster "bsub -R rusage[mem={params.avg_mem}] -M {params.mem_mb} -n {threads} -J {params.name} -W {params.walltime} -o /home/kraemers/temp/logs/" \
 --jobs 1000 \
 --keep-going \
 --config \
@@ -22,6 +22,8 @@ snakemake \
 
 --forcerun methyldackel_per_cytosine_per_motif \
 --dryrun \
+
+
 
 
 
@@ -70,6 +72,7 @@ import os
 import re
 from pathlib import Path
 import pandas as pd
+import numpy as np
 from smk_wgbs import sel_expand, find_workflow_version
 from smk_wgbs.tools import fp_to_parquet, fp_to_bedgraph, run_methyldackel, methyldackel_bedgraph_to_bed_and_parquet, fp_to_pickle
 from functools import partial
@@ -229,11 +232,19 @@ def get_fastq_screen_txt_fp(row_ser):
     return out_dir + f'/{fastq_stem}_screen.txt'
 fastq_screen_txts_untrimmed = metadata_table.apply(get_fastq_screen_txt_fp, axis=1)
 
+# initial solution to allow turning some specialized functionality on and off
+# implementation will change in the future
+# currently, this is only targeted at fastq_screen from the experiment results
+experiment_result_targets_d = config['experiment_result_patterns'].copy()
+if not config['modules']['fastq_screen']:
+    experiment_result_targets_d.pop('multiqc_read_level')
+experiment_result_targets = list(experiment_result_targets_d.values())
+
 rule all:
     input:
          targets,
          multiqc_report_fp,
-         list(config['experiment_result_patterns'].values()),
+         experiment_result_targets,
          # config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
          # fastq_screen_dirs,
          # config['experiment_result_patterns']['multiqc_read_level'],
@@ -266,6 +277,16 @@ if config['alignment_combi'] == 'SE_PE':
 else:
     se_fq_input = config['result_patterns']['trimmed_fastq']
 
+
+def bismark_se_alignment_get_walltime(wildcards, input, attempt):
+    lane_size_gb = os.path.getsize(input.fq) / 1e9 * 2
+    # 30 min minimum processing time, plus 2h per 4 GB of data
+    walltime_min = min(360 + 60 * lane_size_gb, 590)
+    # convert to string HH:MM
+    # return f'{np.floor(walltime_min / 60):02.0f}:{walltime_min % 60:02.0f}'
+    return int(walltime_min * attempt)
+
+
 rule bismark_se_atomic_alignment:
     input:
          fq = se_fq_input,
@@ -277,14 +298,16 @@ rule bismark_se_atomic_alignment:
           bismark_report = config['result_patterns']['se_atomic_bam_unsorted'].replace('.bam', '_SE_report.txt'),
           temp_dir = temp(directory(config['result_patterns']['se_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
+    resources:
+        avg_mem = lambda wildcards, attempt: 16000,
+        mem_mb = lambda wildcards, attempt: 16000,
+        walltime_min = bismark_se_alignment_get_walltime,
+        attempt = lambda wildcards, attempt: attempt,
     params:
         genome_dir = config['genome_dir'],
-        avg_mem = 12000,
-        max_mem = 16000,
         name = 'bismark_alignment_SE_{entity}_{sample}',
-        walltime = '08:00',
-        # walltime = '00:30',
-    threads: 6
+        # walltime_min = '00:30',
+    threads: 4
     log:
         config['log_dir'] + '/bismark_atomic-alignment_SE_{protocol}_{entity}_{sample}_{uid}_{lib}_R{read_number}.log'
     # basename and multicore together are not possible
@@ -292,9 +315,19 @@ rule bismark_se_atomic_alignment:
     # --local
     # --parallel 4 \
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.run_bismark_alignment(
                 input, output, log, params, is_paired=False, upto=config['upto'],
         )
+
+
+def bismark_pe_alignment_get_walltime(wildcards, input, attempt):
+    lane_size_gb = os.path.getsize(input.fq_r1) / 1e9 * 2
+    # 30 min minimum processing time, plus 2h per 4 GB of data
+    walltime_min = min(420 + 60 * lane_size_gb, 590)
+    # convert to string HH:MM
+    # return f'{np.floor(walltime_min / 60):02.0f}:{walltime_min % 60:02.0f}'
+    return int(walltime_min * attempt)
 
 
 rule bismark_pe_atomic_alignment:
@@ -313,14 +346,16 @@ rule bismark_pe_atomic_alignment:
           bismark_report = config['result_patterns']['pe_atomic_bam_unsorted'].replace('.bam', '_PE_report.txt'),
           temp_dir = temp(directory(config['result_patterns']['pe_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
+    resources:
+         avg_mem = lambda wildcards, attempt: 16000,
+         mem_mb = lambda wildcards, attempt: 16000,
+         walltime_min = bismark_pe_alignment_get_walltime,
+         # walltime_min = '00:30',
+         attempt = lambda wildcards, attempt: attempt,
     params:
           genome_dir = config['genome_dir'],
-          avg_mem = 24000,
-          max_mem = 32000,
           name = 'bismark_alignment_PE_{entity}_{sample}',
-          walltime = '08:00',
-          # walltime = '00:30',
-    threads: 6
+    threads: 4
     log:
        config['log_dir'] + '/bismark_atomic-alignment_PE_{protocol}_{entity}_{sample}_{uid}_{lib}.log'
     # basename and multicore together are not possible
@@ -328,6 +363,7 @@ rule bismark_pe_atomic_alignment:
     # --local
     # --parallel 4 \
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.run_bismark_alignment(
                 input, output, log, params, is_paired=True, upto=config['upto'],
         )
@@ -345,12 +381,15 @@ rule final_alignment:
          find_final_alignment_input,
     output:
           bam = config['result_patterns']['final_bam'],
+    resources:
+         walltime_min = lambda wildcards, input, attempt: (20 if len(input) > 1 else 3) * attempt,
+         avg_mem = lambda wildcards, input, attempt: (600 if len(input) > 1 else 100) * attempt,
+         mem_mb = lambda wildcards, input, attempt: (800 if len(input) > 1 else 200) * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 6000,
-          max_mem = 8000,
-          name = 'merge-final-alignment_{entity}_{sample}',
-          walltime = '02:00',
+         name = 'merge-final-alignment_{entity}_{sample}',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.merge_or_symlink(input, output)
 
 
@@ -359,15 +398,23 @@ rule bismark_se_sort_atomic_bam:
          bam = config['result_patterns']['se_atomic_bam_unsorted'],
     output:
           bam = config['result_patterns']['se_atomic_bam_sorted'],
+    resources:
+        # default -m: 768 Mb
+        avg_mem = lambda wildcards, attempt: 1000 * attempt,
+        mem_mb = lambda wildcards, attempt: 1500 * attempt,
+        walltime_min = lambda  wildcards, attempt: 10 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
     params:
-          # default -m: 768 Mb
-          avg_mem = 8 * 1000,
-          max_mem = 8 * 1600,
-          walltime = '00:30',
-          name = 'sort_atomic_bam_{entity}_{sample}_{lib}_{uid}'
+          name = 'sort_atomic_bam_{entity}_{sample}_{lib}_{uid}',
     threads: 8
     shell:
-        "samtools sort -o {output} -T {output} -@ 8 {input}"
+        """        
+        if (( {resources.attempt} >= 4 )) ; then
+            exit 1
+        else
+            samtools sort -o {output} -T {output} -@ 8 {input}
+        fi
+        """
 
 
 rule bismark_pe_sort_atomic_bam:
@@ -375,15 +422,22 @@ rule bismark_pe_sort_atomic_bam:
          bam = config['result_patterns']['pe_atomic_bam_unsorted'],
     output:
           bam = config['result_patterns']['pe_atomic_bam_sorted'],
+    resources:
+         avg_mem = lambda wildcards, attempt: 1600 * attempt,
+         mem_mb = lambda wildcards, attempt: 2000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          # default -m: 768 Mb
-          avg_mem = 8 * 1000,
-          max_mem = 8 * 1600,
-          walltime = '00:30',
-          name = 'sort_atomic_bam_PE_{entity}_{sample}_{lib}_{uid}'
+          name = 'sort_atomic_bam_PE_{entity}_{sample}_{lib}_{uid}',
     threads: 8
     shell:
-         "samtools sort -o {output} -T {output} -@ 8 {input}"
+        """        
+        if (( {resources.attempt} >= 4 )) ; then
+            exit 1
+        else
+            samtools sort -o {output} -T {output} -@ 8 {input}
+        fi
+        """
 
 
 def find_atomic_bams_for_library(wildcards):
@@ -423,26 +477,32 @@ rule bismark_merge_library_mdup:
                  '.bam$',
                  '_mdup-metrics.txt',
                  config['result_patterns']['pe_or_se_library_bam']),
+    resources:
+         # default -m: 768 Mb
+         avg_mem = lambda wildcards, attempt: 6000,
+         mem_mb = lambda wildcards, attempt: 8000,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          # default -m: 768 Mb
-          avg_mem = 8 * 1000,
-          max_mem = 8 * 1600,
-          max_mem_gb = '13G',
-          walltime = '00:30',
+          max_mem_gb = '8G',
           name = 'mdup_merge_{pairing}_{entity}_{sample}_{lib}',
           input_spec = lambda wildcards, input: ' '.join(f'INPUT={i}' for i in input)
     # java  -jar picard.jar
     # OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500 \ #changed from default of 100
     shell:
         """
-        picard -Xmx{params.max_mem_gb} MarkDuplicates \
-        {params.input_spec} \
-        OUTPUT={output.bam} \
-        METRICS_FILE={output.metrics} \
-        CREATE_INDEX=false \
-        TMP_DIR=/tmp
-        
-        samtools index {output.bam}
+        if (( {resources.attempt} >= 4 )) ; then
+            exit 1
+        else
+            picard -Xmx{params.max_mem_gb} MarkDuplicates \
+            {params.input_spec} \
+            OUTPUT={output.bam} \
+            METRICS_FILE={output.metrics} \
+            CREATE_INDEX=false \
+            TMP_DIR=/tmp
+            
+            samtools index {output.bam}
+        fi
         """
 
 
@@ -474,12 +534,16 @@ rule bismark_merge_libraries:
         bam = config['result_patterns']['pe_or_se_bam'],
         bai = config['result_patterns']['pe_or_se_bam'] + '.bai',
     # TODO: function which returns **resources and returns minimal resources if only hard linking is required
+    resources:
+         walltime_min = lambda wildcards, input, attempt: (30 if len(input) > 1 else 3) * attempt,
+         avg_mem = lambda wildcards, input, attempt: (6000 if len(input) > 1 else 100),
+         mem_mb = lambda wildcards, input, attempt: (8000 if len(input) > 1 else 200),
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 6000,
-          max_mem = 8000,
           name = 'merge-lib_{entity}_{sample}_{pairing}',
-          walltime = '00:30',
+          # unpacking for resources / params: https://bitbucket.org/snakemake/snakemake/issues/471/unpack-for-params
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.merge_or_symlink(input, output)
 
 
@@ -567,8 +631,8 @@ def get_methyldackel_output_params(
     return methyldackel_output, methyldackel_walltime, motif_params_str
 
 methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_output_params(
-        cg_walltime='02:00',
-        chh_walltime='10:00',
+        cg_walltime=60,
+        chh_walltime=120,
         sampling_name='',
         calling_mode='full'
 )
@@ -577,11 +641,13 @@ rule methyldackel_per_cytosine_per_motif:
           **methyldackel_input,
     output:
           methyldackel_output,
+    resources:
+         avg_mem = lambda wildcards, attempt: 4000,
+         mem_mb = lambda wildcards, attempt: 8000,
+         walltime_min = lambda wildcards, attempt: methyldackel_walltime * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 6000,
-          max_mem = 10000,
           name = 'methyldackel_per_cytosine_{pairing}_{entity}_{sample}',
-          walltime = methyldackel_walltime,
           prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
                   f'{wildcards.pairing}_{wildcards.entity}_{wildcards.sample}'),
           # TODO: is config directly available in rule?
@@ -594,11 +660,12 @@ rule methyldackel_per_cytosine_per_motif:
     log:
        config['log_dir'] + '/methyldackel_per_cytosine_per_motif:{pairing}_{protocol}_{entity}_{sample}.log'
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         run_methyldackel(input, output, params, threads)
 
 methyldackel_output, methyldackel_walltime, motif_params_str = get_methyldackel_output_params(
-        cg_walltime='00:30',
-        chh_walltime='02:00',
+        cg_walltime=60,
+        chh_walltime=120,
         sampling_name=sampling_name,
         calling_mode='sampled')
 
@@ -607,11 +674,13 @@ rule methyldackel_per_cytosine_per_motif_sampled:
          **methyldackel_input,
     output:
           methyldackel_output,
+    resources:
+             avg_mem = lambda wildcards, attempt: 3000,
+             mem_mb = lambda wildcards, attempt: 4000,
+             walltime_min = lambda wildcards, attempt: methyldackel_walltime * attempt,
+             attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 6000,
-          max_mem = 10000,
           name = 'methyldackel_se_per_cytosine_{entity}_{sample}' + sampling_name,
-          walltime = methyldackel_walltime,
           prefix = lambda wildcards, output: Path(output[0]).parent.joinpath(
                   f'{wildcards.pairing}_{wildcards.entity}_{wildcards.sample}'),
           # TODO: is config directly available in rule?
@@ -624,6 +693,7 @@ rule methyldackel_per_cytosine_per_motif_sampled:
     log:
        config['log_dir'] + '/methyldackel_per_cytosine_per_motif_sampled:{pairing}_{protocol}_{entity}_{sample}.log'
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         run_methyldackel(input, output, params, threads)
 
 
@@ -636,15 +706,18 @@ rule methyldackel_merge_context:
         bedgraph = fp_to_bedgraph(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
         parquet = fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
         pickle = fp_to_pickle(config['result_patterns']['pe_or_se_mcalls_merged_per_motif'])
+    resources:
+         avg_mem = lambda wildcards, attempt: 800 * attempt,
+         mem_mb = lambda wildcards, attempt: 1200 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
         chromosomes = config['chromosomes'],
-        avg_mem = 8000,
-        max_mem = 12000,
-        walltime = '00:20',
         name = 'methyldackel_SE_mergeContext_{entity}_{sample}_{motif}{region}',
     log:
         config['log_dir'] + '/methyldackel_mergeContext_{pairing}_{entity}_{sample}_{motif}{region}'
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         from pandas.api.types import CategoricalDtype
 
         print('run MethylDackel MergeContext')
@@ -683,12 +756,15 @@ rule final_mcalls:
          parquet = fp_to_parquet(final_mcalls_cyt_bed),
          bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
          pickle = fp_to_pickle(final_mcalls_cyt_bed),
+    resources:
+         avg_mem = lambda wildcards, attempt: 3000 * attempt,
+         mem_mb = lambda wildcards, attempt: 5000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 8000,
-          max_mem = 12000,
-          walltime = '00:30',
           name = 'merge-final-calls_{entity}_{sample}'
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.merge_mcalls(input, output, wildcards)
 
 final_mcalls_merged_bed = config['result_patterns']['final_mcalls_merged_per_motif']
@@ -701,13 +777,16 @@ rule final_mcalls_merged_motifs:
          bedgraph = fp_to_bedgraph(final_mcalls_merged_bed),
          parquet = fp_to_parquet(final_mcalls_merged_bed),
          pickle = fp_to_pickle(final_mcalls_merged_bed),
+    resources:
+         avg_mem = lambda wildcards, attempt: 600 * attempt,
+         mem_mb = lambda wildcards, attempt: 1000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 2000,
-          max_mem = 4000,
-          walltime = '01:00',
           name = 'merge-context_final-mcalls_{entity}_{sample}_{motif}',
           chromosomes = config['chromosomes'],
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         from pandas.api.types import CategoricalDtype
 
         print('run MethylDackel MergeContext')
@@ -739,22 +818,28 @@ rule bismark_genome_preparation:
     output:
           config['genome_dir'] + "/Bisulfite_Genome/CT_conversion/genome_mfa.CT_conversion.fa",
           config['genome_dir'] + "/Bisulfite_Genome/GA_conversion/genome_mfa.GA_conversion.fa"
+    resources:
+         avg_mem = lambda wildcards, attempt: 20000,
+         mem_mb = lambda wildcards, attempt: 24000,
+         walltime_min = lambda wildcards, attempt: 8 * 60 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-        avg_mem = 20000,
-        max_mem = 24000,
         name = 'ref_conversion',
-        walltime = '08:00',
     threads: 64
     # message: "Converting Genome into Bisulfite analogue"
     shell:
          """
-         bismark_genome_preparation \
-         --bowtie2 \
-         --parallel 32 \
-         --genomic_composition \
-         --verbose \
-         {input} \
-         > {log} 2>&1
+         if (( {resources.attempt} >= 4 )) ; then
+             exit 1
+         else
+             bismark_genome_preparation \
+             --bowtie2 \
+             --parallel 32 \
+             --genomic_composition \
+             --verbose \
+             {input} \
+             > {log} 2>&1
+         fi
          """
 
 
@@ -770,6 +855,7 @@ if config['illumina_machine'] == 'nextseq':
 else:
     phred_filter_command = f'-q {cutadapt_phred_filter}'
 
+
 rule trim_reads_pe:
     input:
         unpack(partial(smk_wgbs.tools.find_fastqs, metadata_table=metadata_table)),
@@ -780,13 +866,15 @@ rule trim_reads_pe:
        config['log_dir'] + '/cutadapt_{protocol}_{entity}_{sample}_{uid}_{lib}.log'
     # message:
     #        "Trimming raw paired-end read data\n{input.fq_r1}\n{input.fq_r2}"
+    resources:
+         avg_mem = lambda wildcards, attempt: 800 * attempt,
+         mem_mb = lambda wildcards, attempt: 1500 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 4000,
-          max_mem = 6000,
           name = 'trim_reads_{entity}_{sample}',
-          walltime = '00:30',
           phred_filter_command = phred_filter_command,
-    threads: 16
+    threads: 8
     # currently, do not trim random hexamers priming sites \
     # note that this anyway does not take care of priming sites at the end of short reads \
     # -u 6
@@ -795,18 +883,22 @@ rule trim_reads_pe:
     # --pair-filter=any \
     shell:
          """
-         cutadapt \
-         {config[cutadapt_options]} \
-         {params.phred_filter_command} \
-         --cores {threads} \
-         -a {config[read1_adapter_seq]} \
-         -A {config[read2_adapter_seq]} \
-         -o {output.fq_r1} \
-         -p {output.fq_r2} \
-         --pair-filter=any \
-         {input.fq_r1} \
-         {input.fq_r2} \
-         > {log} 2>&1
+         if (( {resources.attempt} >= 4 )) ; then
+             exit 1
+         else
+             cutadapt \
+             {config[cutadapt_options]} \
+             {params.phred_filter_command} \
+             --cores {threads} \
+             -a {config[read1_adapter_seq]} \
+             -A {config[read2_adapter_seq]} \
+             -o {output.fq_r1} \
+             -p {output.fq_r2} \
+             --pair-filter=any \
+             {input.fq_r1} \
+             {input.fq_r2} \
+             > {log} 2>&1
+         fi
          """
 
 
@@ -837,15 +929,18 @@ rule nome_filtering:
           ch_acc_parquet = RESPAT['ch_acc_parquet'],
           chg_meth_parquet = RESPAT['chg_meth_parquet'],
           chh_meth_parquet = RESPAT['chh_meth_parquet'],
+    resources:
+         avg_mem = lambda wildcards, attempt: 60000 * attempt,
+         mem_mb = lambda wildcards, attempt: 80000 * attempt,
+         walltime_min = lambda wildcards, attempt: 4 * 60 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 60000,
-          max_mem = 80000,
-          walltime = '04:00',
           name = 'nome_filtering_{entity}_{sample}',
           chromosomes = config['chromosomes'],
     log:
        config['log_dir'] + '/nome-filtering_{protocol}_{alignment_combi}_{entity}_{sample}{region}.log'
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.nome_filtering(input, output, params)
 
 
@@ -855,18 +950,24 @@ rule samtools_stats:
          ref_genome_unconverted = ancient(config['genome_fa']),
     output:
           config['result_patterns']['final_bam_samtools_stats'],
+    resources:
+         avg_mem = lambda wildcards, attempt: 100 * attempt,
+         mem_mb = lambda wildcards, attempt: 150 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 500,
-          max_mem = 1000,
-          walltime = '00:20',
           name = 'samtools_stats_{entity}_{sample}',
     shell:
          """
-         samtools stats \
-         --insert-size 3000 \
-         --ref-seq {input.ref_genome_unconverted} \
-         {input.bam} \
-         > {output[0]}
+         if (( {resources.attempt} >= 4 )) ; then
+             exit 1
+         else
+             samtools stats \
+             --insert-size 3000 \
+             --ref-seq {input.ref_genome_unconverted} \
+             {input.bam} \
+             > {output[0]}
+         fi
          """
 
 
@@ -875,14 +976,20 @@ rule samtools_flagstats:
          bam = config['result_patterns']['final_bam'],
     output:
           config['result_patterns']['final_bam_samtools_flagstats'],
+    resources:
+         avg_mem = lambda wildcards, attempt: 500 * attempt,
+         mem_mb = lambda wildcards, attempt: 1000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 500,
-          max_mem = 1000,
-          walltime = '00:20',
           name = 'samtools_flagstats_{entity}_{sample}',
     shell:
          """
-         samtools flagstat {input.bam} > {output[0]}
+         if (( {resources.attempt} >= 4 )) ; then
+             exit 1
+         else
+             samtools flagstat {input.bam} > {output[0]}
+         fi
          """
 
 
@@ -928,12 +1035,15 @@ rule multiqc:
     output:
           report_html=multiqc_report_fp,
           file_list=multiqc_report_fp + '_file-list.txt',
+    resources:
+         avg_mem = lambda wildcards, attempt: 5000,
+         mem_mb = lambda wildcards, attempt: 10000,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 5000,
-          max_mem = 10000,
-          walltime = '00:15',
           name = f'multiqc_{config["alignment_config_name"]}',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         with open(output.file_list, 'wt') as fout:
             fout.write('\n'.join(input) + '\n')
         shell(f"""
@@ -963,12 +1073,15 @@ rule multiqc_read_level:
     output:
           report_html=config['experiment_result_patterns']['multiqc_read_level'],
           file_list= config['experiment_result_patterns']['multiqc_read_level'] + '_file-list.txt',
+    resources:
+         avg_mem = lambda wildcards, attempt: 2000 * attempt,
+         mem_mb = lambda wildcards, attempt: 3000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem = 2000,
-          max_mem = 3000,
-          walltime = '00:15',
           name = f'multiqc_{config["alignment_config_name"]}_read-level',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         with open(output.file_list, 'wt') as fout:
             fout.write('\n'.join(input) + '\n')
         shell(f"""
@@ -1005,6 +1118,11 @@ rule meth_calling_qc:
         meth_calling_qc_metadata_table['fp'].to_list()
     output:
         done = touch(config['result_patterns']['meth_calling_qc_prefix'] + '.qc-done'),
+    resources:
+         avg_mem = lambda wildcards, attempt: 4000 * attempt,
+         mem_mb = lambda wildcards, attempt: 4000 * attempt,
+         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         attempt = lambda wildcards, attempt: attempt,
     params:
         metadata_table_expanded = lambda wildcards: smk_wgbs.tools.expand_mcalls_metadata_table(
                 meth_calling_qc_metadata_table,
@@ -1012,11 +1130,9 @@ rule meth_calling_qc:
                 sample=wildcards.sample
         ),
         prefix=config['result_patterns']['meth_calling_qc_prefix'],
-        avg_mem=8000,
-        max_mem=8000,
-        walltime='00:10',
         name = 'mcalling_qc_{entity}_{sample}',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.compute_meth_calling_qc_stats(
                 metadata_table=params.metadata_table_expanded,
                 chrom_regions=config['chrom_regions'],
@@ -1044,17 +1160,20 @@ rule concat_meth_calling_qc_data:
     output:
         **{k: v for k, v in config['experiment_result_patterns'].items()
          if k.startswith('meth_calling')}
+    resources:
+             avg_mem = lambda wildcards, attempt: 24000 * attempt,
+             mem_mb = lambda  wildcards, attempt: 32000 * attempt,
+             walltime_min = lambda  wildcards, attempt: 59 * attempt,
+             attempt = lambda wildcards, attempt: attempt,
     params:
           # TODO-protocol
           # Protect against expansion attempt for entity and sample
           prefix=lambda wildcards: sel_expand(
                   config['result_patterns']['meth_calling_qc_prefix'],
                   protocol=config['protocol']),
-          avg_mem=16000,
-          max_mem=20000,
-          walltime='00:20',
           name = 'concat_meth_calling_qc_data',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.concat_meth_calling_qc_data(
                 metadata_table, params.prefix, output
         )
@@ -1081,12 +1200,15 @@ rule collect_samtools_stats:
         samtools_stats_files,
     output:
         config['experiment_result_patterns']['samtools_stats']
+    resources:
+             avg_mem = lambda  wildcards, attempt: 4000 * attempt,
+             mem_mb = lambda  wildcards, attempt: 5000 * attempt,
+             walltime_min = lambda  wildcards, attempt: 20 * attempt,
+             attempt = lambda wildcards, attempt: attempt,
     params:
-          avg_mem=4000,
-          max_mem=5000,
-          walltime='00:20',
           name = 'collect_samtools_stats',
     run:
+        smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
         smk_wgbs.tools.collect_samtools_stats(
                 input_fps=input,
                 output_p=output[0],
@@ -1101,21 +1223,27 @@ rule collect_samtools_stats:
 rule download_fastq_screen_indices:
     output:
         fastq_screen_index_conf = config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
+    resources:
+             avg_mem = lambda wildcards, attempt: 4000 * attempt,
+             mem_mb = lambda wildcards, attempt: 4000 * attempt,
+             walltime_min = lambda wildcards, attempt: 2 * 60 * attempt,
+             attempt = lambda wildcards, attempt: attempt,
     params:
         outdir=os.path.dirname(config['database_patterns']['fastq_screen_index_dir']),
-        avg_mem = 4000,
-        max_mem = 4000,
-        walltime = '02:00',
         name = 'fastq-screen_get-genomes'
     shell:
         """
-        if [ -d "{params.outdir}/FastQ_Screen_Genomes_Bisulfite" ]; then
-            rm -r {params.outdir}/FastQ_Screen_Genomes_Bisulfite
+        if (( {resources.attempt} >= 4 )) ; then
+            exit 1
+        else
+            if [ -d "{params.outdir}/FastQ_Screen_Genomes_Bisulfite" ]; then
+                rm -r {params.outdir}/FastQ_Screen_Genomes_Bisulfite
+            fi
+            fastq_screen \
+            --bisulfite \
+            --get_genomes \
+            --outdir {params.outdir}
         fi
-        fastq_screen \
-        --bisulfite \
-        --get_genomes \
-        --outdir {params.outdir}
         """
 
 # TODO: conf file had to be manually edited and we use the copy in the smk repo for now
@@ -1130,11 +1258,13 @@ rule fastq_screen:
          fastq_screen_index_conf = config['database_patterns']['fastq_screen_index_dir'] + '/fastq_screen.conf',
     output:
         txt = config['result_patterns']['fastq_screen'] + '/{fastq_stem}_screen.txt'
+    resources:
+             avg_mem = lambda wildcards, attempt: 16000,
+             mem_mb = lambda wildcards, attempt: 17000,
+             walltime_min = lambda wildcards, attempt: 90 * attempt,
+             attempt = lambda wildcards, attempt: attempt,
     threads: 6
     params:
-        avg_mem = 16000,
-        max_mem = 17000,
-        walltime = '00:45',
         name = 'fastq-screen',
         outdir = lambda wildcards, output: os.path.dirname(output.txt)
     # --bowtie2 '--trim5 6' \
@@ -1142,17 +1272,21 @@ rule fastq_screen:
     #   --threads {threads} \
     shell:
         """
-        mkdir -p {params.outdir}/fastq-screen-tmp-files
-        cd {params.outdir}/fastq-screen-tmp-files
-        fastq_screen \
-        --aligner bowtie2 \
-        --bisulfite \
-        --conf /home/kraemers/projects/smk_wgbs/smk_wgbs/fastq_screen.conf \
-        --force \
-        --nohits \
-        --outdir {params.outdir} \
-        --subset 100000 \
-        {input.fq}
+        if (( {resources.attempt} >= 4 )) ; then
+            exit 1
+        else
+            mkdir -p {params.outdir}/fastq-screen-tmp-files
+            cd {params.outdir}/fastq-screen-tmp-files
+            fastq_screen \
+            --aligner bowtie2 \
+            --bisulfite \
+            --conf /home/kraemers/projects/smk_wgbs/smk_wgbs/fastq_screen.conf \
+            --force \
+            --nohits \
+            --outdir {params.outdir} \
+            --subset 100000 \
+            {input.fq}
+        fi
         """
 
 # rule fastqc:
@@ -1165,13 +1299,14 @@ rule fastq_screen:
 #           fq_r2 = temp(sel_expand(config['result_patterns']['fastq_fastqc'], read_number='2').replace('_fastqc.zip', '.fastq.gz')),
 #     params:
 #           output_dir = lambda wildcards, output: Path(output[0]).parent,
-#           avg_mem = 2000,
-#           max_mem = 4000,
-#           walltime = '00:30',
+#           avg_mem = lambda wildcards, attempt: 2000 * attempt,
+#           mem_mb = lambda wildcards, attempt: 4000 * attempt,
+#           walltime_min = lambda wildcards, attempt: 30 * attempt,
 #           name = 'fastqc',
 #     threads: 2
 #     # -c {input.adapter_sequences_tsv} \
 #     run:
+#         smk_wgbs.tools.abort_on_nth_attempt(resources.attempt, 4)
 #         import os
 #         from pathlib import Path
 #         os.symlink(input.fq_r1, output.fq_r1)

@@ -4,6 +4,13 @@ alignment_combi: 'SE_PE'
 #experiment_name: 'scnmt-1'
 #protocol: scnmt
 
+
+# initial solution to allow turning some specialized functionality on and off
+# implementation will change in the future
+# currently, this is only targeted at fastq_screen from the experiment results
+modules:
+  fastq_screen: False
+
 read1_adapter_seq: AGATCGGAAGAGCG
 read2_adapter_seq: AGATCGGAAGAGCG
 # switching between phred filtering for nextseq and hiseq data is automatically handled,

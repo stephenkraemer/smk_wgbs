@@ -1,4 +1,5 @@
 import glob
+import sys
 from collections import defaultdict
 import pickle
 import itertools
@@ -1055,3 +1056,10 @@ def test_collect_samtools_stats():
         keys=dict(e="exp1", a="al1", m="meth1"),
         metadata_table=metadata_table,
     )
+
+
+def abort_on_nth_attempt(attempt: int, max_attempts: int):
+    if attempt >= max_attempts:
+        sys.exit(1)
+
+
