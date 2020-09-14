@@ -1093,7 +1093,7 @@ rule multiqc_read_level:
               )
 
 
-meth_calling_qc_metadata_table = smk_wgbs.tools.create_mcalls_metadata_table(
+meth_calling_qc_metadata_table = smk_wgbs.tools.create_mcalls_pattern_table(
         config, sampling_name
 )
 

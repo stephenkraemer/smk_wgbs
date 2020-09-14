@@ -1,3 +1,4 @@
+"""Tools used internally within the workflow"""
 import glob
 import sys
 from collections import defaultdict
@@ -658,7 +659,7 @@ def test_meth_calling_qc_stats(config, sampling_name, wildcards, keys, names):
 
     sampling_name = "_unused"
 
-    metadata_table_with_wildcards = create_mcalls_metadata_table(config, sampling_name)
+    metadata_table_with_wildcards = create_mcalls_pattern_table(config, sampling_name)
     metadata_table = expand_mcalls_metadata_table(
         metadata_table_with_wildcards, wildcards.entity, wildcards.sample
     )
@@ -672,9 +673,26 @@ def test_meth_calling_qc_stats(config, sampling_name, wildcards, keys, names):
     )
 
 
-def create_mcalls_metadata_table(config, sampling_name):
+def create_mcalls_pattern_table(config: Dict, sampling_name: str) -> pd.DataFrame:
+    """Create table of methylation call results patterns used by a given workflow run
+
+    Parameters
+    ----------
+    config: smk_wgbs config used within a given run
+    sampling_name: sampling name, currently defined in wgbs_alignment.smk, so must be passed
+        in addition to config dict
+
+    Returns
+    -------
+    Dataframe with columns: pairing (possible values: SE, PE, SE_PE), merging_mode ('single'|'merged'), motif (CHH, CHG, CG), fp ('.p')
+    The available pairings depend on the alignment_combi used for the run (taken from config)
+    The Dataframe provides patterns for relative paths to the mcalling pickle results
+    """
 
     # TODO-protocol
+    # Dict of all possible methylation output patterns
+    # Note that the mcall results will be available as bed, parquet and pickle, but the config file
+    # only lists the bed file paths
     patterns = {
         "SE": {
             "merged": sel_expand(
@@ -713,10 +731,15 @@ def create_mcalls_metadata_table(config, sampling_name):
             ),
         },
     }
+
+    # convert the bed file patterns taken from the config file to pickle
+    # only pickle patterns are listed in the output df
     for alignment_mode, d1 in patterns.items():
         for merge_mode, d2 in d1.items():
             d1[merge_mode] = fp_to_pickle(d2)
 
+    # if bismark alignments were performed with SE_PE, both SE, PE and merged calls exist,
+    # so we can provide patterns for all of these cases. Otherwise, we will only have SE or PE
     alignment_combis = (
         ["PE", "SE", "SE_PE"]
         if config["alignment_combi"] == "SE_PE"
