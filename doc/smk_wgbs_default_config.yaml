@@ -1,0 +1,220 @@
+alignment_config_name: default-params
+mcalling_config_name: default-params
+alignment_combi: 'SE_PE'
+#experiment_name: 'scnmt-1'
+#protocol: scnmt
+
+# initial solution to allow turning some specialized functionality on and off
+# implementation will change in the future
+# currently, this is only targeted at fastq_screen from the experiment results
+modules:
+  fastq_screen: False
+
+
+read1_adapter_seq: AGATCGGAAGAGCG
+read2_adapter_seq: AGATCGGAAGAGCG
+# switching between phred filtering for nextseq and hiseq data is automatically handled,
+# therefore, phred score filtering score needs to be declared outside of options_str
+cutadapt_phred_filter: 10
+cutadapt_options: >-
+  -u 6
+  -U 6
+  --minimum-length 30
+  --max-n 0.3
+
+# the following options are controlled by the workflow and may not be used
+# options defining the motifs for which calls are made:
+# --noCpG, --CHH, --CHG
+# options restricting the calls to certain regions, ie
+# -r, ...
+# of course, all file paths, including
+# -o, ...
+# -@ (threads)
+methyldackel_options: >-
+  --ignoreFlags 3840
+  --requireFlags 0
+  -q 30
+  -p 20
+
+
+upto: -1
+
+# FASTQ Metadata table
+# --------------------
+
+# Required columns:
+# - entity: e.g. HSC, Patient1
+# - sample: e.g. Tumor, Control, cell 1/2/3
+# - read_number: integer
+# - path: path to untrimmed fastq files for read 1 and read 2
+
+metadata_table_tsv: ''
+#  /icgc/dkfzlsdf/analysis/hs_ontogeny/metadata/ngs-experiments/scmt-scnmt-bravo-pilot.tsv
+
+# if a fastq_pattern is provided, it must have the fields: entity, sample, read_number and it must additionally have at least one additional field which serves to distinguish read pairs (even if this is not really necessary for the given dataset).
+# The fastq_pattern will be used to create a metadata table with one column per field (using smk_wgbs.create_metadata_table_from_file_pattern).
+# The metadata table will be placed at metadata_table_tsv (with a timestamp before the suffix)
+# [optional]
+fastq_pattern:
+  /icgc/dkfzlsdf/project/mouse_hematopoiesis_PBAT/sequencing/whole_genome_bisulfite_tagmentation_sequencing/view-by-pid/{entity}/{sample}/paired/run{run}/sequence/AS-{asid}-LR-{lane}_R{read_number}.fastq.gz
+
+
+illumina_machine: 'hiseq2000'
+
+protocol_config:
+  scnmt:
+    is_nome_seq: True
+    motifs:
+      CHH: 'full'
+      CHG: 'full'
+      CG: 'full'
+  sctm:
+    is_nome_seq: False
+    motifs:
+      CHH: 'full'
+      CHG: 'full'
+      CG: 'full'
+
+
+# Other input paths
+# -----------------
+
+# The path to the folder containing either i) the genome to be bisulfite converted.
+# or ii) the bisulfite converted genomes produced by Bismark (the parent folder of Bisulfite_Genome/)
+# When the genome is to be created,the Bismark Genome Preparation expects one or more fastA files in the folder (with the file extension: .fa or .fasta (also ending in .gz)).
+# [required]
+genome_dir:
+  /icgc/dkfzlsdf/analysis/B080/kraemers/projects/mbias/sandbox/genomes/GRCm38mm10_PhiX_Lambda_bismark
+genome_fa:
+  /icgc/dkfzlsdf/analysis/B080/kraemers/projects/mbias/sandbox/genomes/GRCm38mm10_PhiX_Lambda_bismark/GRCm38mm10_PhiX_Lambda.fa
+
+
+# Output file paths
+# -----------------
+
+
+
+# If a results per entity directory is specified, relative result_paths are interpreted as relative to this directory
+# If not specified, relative result_paths will raise a ValueError
+# [required] if result_patterns are relative (the default), otherwise optional
+results_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/results
+
+database_dir:
+  /icgc/dkfzlsdf/analysis/hs_ontogeny/databases
+
+
+results_prefix:
+  '{protocol}/results-per-entity/{entity}/{sample}/smk-wgbs/{config_name}_{workflow_version}'
+
+multiqc_by_experiment:
+  '/icgc/dkfzlsdf/analysis/hs_ontogeny/results/{protocol}/cohort-results/experiment-qc/{experiment}-multiqc.html'
+
+database_patterns:
+  fastq_screen_index_dir:
+    smk-wgbs/reference-genomes/fastq-screen-indices/FastQ_Screen_Genomes_Bisulfite
+
+experiment_result_patterns:
+  meth_calling_exp_qc_coverage_long:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-long.p'
+  meth_calling_exp_qc_coverage_wide:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-wide.p'
+  meth_calling_exp_qc_global_meth:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_global-meth.p'
+  meth_calling_exp_qc_beta_value_dist:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_beta-value-dist.p'
+  meth_calling_exp_qc_coverage_dist:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_{mcalling_config_name}_meth-calling-qc_coverage-dist.p'
+  samtools_stats:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_{alignment_config_name}_samtools-stats.p'
+  multiqc_read_level:
+    '{protocol}/cohort-results/experiment-qc/{experiment}/{experiment}_reads-multiqc.html'
+
+
+
+# [required]
+log_dir: logs
+
+# The result_patterns usually do not need to be edited, unless you want to overwrite the default
+# file structure created by the workflow. All paths must keep all required fields, of course.
+# all bam files have bai indices, even though the paths are not directly specified here
+result_patterns:
+
+  # Turn into temporary or piped result?
+  # basename must match basename of atomic_bam_unsorted, because bismark output name cannot be changed when using parallel processing
+  trimmed_fastq:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed.fastq.gz'
+  unmapped_fastq:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_trimmed_unmapped.fastq.gz'
+  fastq_fastqc:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastqc.zip'
+  fastq_screen:
+    'processed-reads/{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_fastq-screen'
+
+
+  # eg will end up {entity}/{sample}/raw_data/run-{run_id}_asid-{as_id}_LR-{lane_id}_R{read_number}.trimmed.fastq.gz
+  # wildcard constraints not necessary: entity and sample may contain _ and - and be greedy, because they are correctly matched by the first two folders of the path
+  final_mcalls_cytosines_per_motif:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_per-cytosine_{motif}{region}.bed'
+  final_mcalls_merged_per_motif:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_per-motif_{motif}{region}.bed'
+  meth_calling_qc_prefix:
+    'meth-calls/{mcalling_config_name}/meth-calls-qc/meth-calls-qc_{entity}_{sample}'
+
+  pe_or_se_mcalls_cytosines_per_motif:
+    'meth-calls/{mcalling_config_name}/partial-meth-calls/{pairing}_{entity}_{sample}_per-cytosine_{motif}{region}.bed'
+  pe_or_se_mcalls_merged_per_motif:
+    'meth-calls/{mcalling_config_name}/partial-meth-calls/{pairing}_{entity}_{sample}_per-motif_{motif}{region}.bed'
+  final_bam:
+    'alignments/{entity}_{sample}_{alignment_combi}.bam'
+  pe_or_se_bam:
+    'alignments/partial-alignments/{pairing}_{entity}_{sample}.bam'
+  final_bam_samtools_stats:
+    'alignments/{entity}_{sample}_{alignment_combi}_samtools-stats.txt'
+  final_bam_samtools_flagstats:
+    'alignments/{entity}_{sample}_{alignment_combi}_samtools-flagstats.txt'
+  #   'alignments/partial-alignments/SE_{entity}_{sample}_samtools-flagstats.txt'
+  pe_or_se_library_bam:
+    'alignments/partial-alignments/{pairing}_{entity}_{sample}_lib-{lib}.bam'
+  # to allow arbitrary uid tags without a uid keyword (uid_run-abc_lane-001 is not consistent),
+  # lib may not contain underscorse
+  # uid is composed of all other fields in metadata table
+  # --basename to control name in bismark currently not compatible with multicore run
+  # so we have to use the fastq stem (bismarks default)
+  se_atomic_bam_unsorted:
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_unsorted_bismark_bt2.bam'
+  se_atomic_bam_sorted:
+    'alignments/partial-alignments/SE_{entity}_{sample}_lib-{lib}_{uid}_R{read_number}_sorted.bam'
+  pe_atomic_bam_unsorted:
+    'alignments/partial-alignments/PE_{entity}_{sample}_lib-{lib}_{uid}_unsorted_bismark_bt2.bam'
+  pe_atomic_bam_sorted:
+    'alignments/partial-alignments/PE_{entity}_{sample}_lib-{lib}_{uid}_sorted.bam'
+  cg_full_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CG-full{region}.parquet'
+  cg_meth_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CG-meth{region}.parquet'
+  ch_full_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CH-full{region}.parquet'
+  ch_acc_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CH-acc{region}.parquet'
+  chg_meth_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CHG-meth{region}.parquet'
+  chh_meth_parquet:
+    'meth-calls/{mcalling_config_name}/{entity}_{sample}_{alignment_combi}_NOMe_per-cytosine_CHH-meth{region}.parquet'
+
+
+# Else
+# ========================================================================================
+
+# For chromosome categoricals and ordering
+# these must be in the desired sorting order
+chromosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",
+              "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+              "X", "Y", "MT", "phix", "L"]
+
+chrom_regions:
+  Autosomes: ["1", "2", "3", "4", "5", "6", "7", "8", "9",
+              "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+  PhiX: 'phix'
+  Lambda: 'L'
+  MT: 'MT'
