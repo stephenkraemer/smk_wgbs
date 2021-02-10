@@ -176,7 +176,7 @@ def prepare_index_files():
     seq_context_dtype = pd.CategoricalDtype(seq_contexts_l, ordered=True)
 
     seq_context_to_nomeseq_d = {
-        seq: seq[1:3] + ("G" if seq[3] is "G" else "H") for seq in seq_contexts_l
+        seq: seq[1:3] + ("G" if seq[3] == "G" else "H") for seq in seq_contexts_l
     }
 
     nome_seq_context_l = sorted(
@@ -384,7 +384,8 @@ def run_methyldackel(input, output, params, threads):
             -@ {threads} \
             {input.ref_genome_unconverted} \
             {input.bam}
-            """.split()
+            """.split(),
+        check=True
     )
     print("Done with MethylDackel")
 

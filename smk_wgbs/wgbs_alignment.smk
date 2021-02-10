@@ -299,8 +299,8 @@ rule bismark_se_atomic_alignment:
           temp_dir = temp(directory(config['result_patterns']['se_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
     resources:
-        avg_mem = lambda wildcards, attempt: 16000,
-        mem_mb = lambda wildcards, attempt: 16000,
+        avg_mem = lambda wildcards, attempt: 18 * 1024,
+        mem_mb = lambda wildcards, attempt: 18 * 1024,
         walltime_min = bismark_se_alignment_get_walltime,
         attempt = lambda wildcards, attempt: attempt,
     params:
@@ -347,8 +347,8 @@ rule bismark_pe_atomic_alignment:
           temp_dir = temp(directory(config['result_patterns']['pe_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
     resources:
-         avg_mem = lambda wildcards, attempt: 16000,
-         mem_mb = lambda wildcards, attempt: 16000,
+         avg_mem = lambda wildcards, attempt: 18 * 1024,
+         mem_mb = lambda wildcards, attempt: 18 * 1024,
          walltime_min = bismark_pe_alignment_get_walltime,
          # walltime_min = '00:30',
          attempt = lambda wildcards, attempt: attempt,
@@ -821,11 +821,9 @@ rule bismark_genome_preparation:
     resources:
          avg_mem = lambda wildcards, attempt: 20000,
          mem_mb = lambda wildcards, attempt: 24000,
-         walltime_min = lambda wildcards, attempt: 8 * 60 * attempt,
+         walltime_min = lambda wildcards, attempt: 24 * 60 * attempt,
          attempt = lambda wildcards, attempt: attempt,
-    params:
-        name = 'ref_conversion',
-    threads: 64
+    threads: 32
     # message: "Converting Genome into Bisulfite analogue"
     shell:
          """
@@ -834,14 +832,12 @@ rule bismark_genome_preparation:
          else
              bismark_genome_preparation \
              --bowtie2 \
-             --parallel 32 \
+             --parallel 16 \
              --genomic_composition \
              --verbose \
-             {input} \
-             > {log} 2>&1
+             {input}
          fi
          """
-
 
 # ==========================================================================================
 # Trim the reads for adapter-ends and quality
