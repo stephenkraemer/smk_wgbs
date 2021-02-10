@@ -1,8 +1,4 @@
 """
-export PATH=/home/kraemers/projects/Bismark:$PATH
-
-cd /icgc/dkfzlsdf/analysis/hs_ontogeny
-
 snakemake \
 --snakefile $(smk_wgbs_snakefile) \
 --latency-wait 60 \

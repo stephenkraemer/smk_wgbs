@@ -1,12 +1,3 @@
-# lock file of scwgbs_bismark2 sent to Joschka
-# i may have broken the scwgbs_bismark2 env when I tried to setup a new env for Joschka on 2021-02-07
-# also, because I have not deleted this arg:
-# prefix: /icgc/dkfzlsdf/analysis/B080/kraemers/conda2/envs/scwgbs_bismark2
-# Joschka may have overwritten the env accidentally
-# -> this file serves as a backup of the env prior to any possible damage to the env
-# note: bismark and fastqscreen are pinned in this lockfile, BUT i have used patched LOCAL copies of these tools
-# (bismark PR should be merged in 0.23 which is now on conda, so probably not necessary to use local patched version anymore)
-
 name: scwgbs_bismark2
 channels:
   - conda-forge
@@ -274,5 +265,4 @@ dependencies:
   - pip:
     - pyqt5-sip==4.19.18
     - pyqtwebengine==5.12.1
-prefix: /icgc/dkfzlsdf/analysis/B080/kraemers/conda2/envs/scwgbs_bismark2
 
