@@ -703,8 +703,8 @@ rule methyldackel_merge_context:
         parquet = fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
         pickle = fp_to_pickle(config['result_patterns']['pe_or_se_mcalls_merged_per_motif'])
     resources:
-         avg_mem = lambda wildcards, attempt: 800 * attempt,
-         mem_mb = lambda wildcards, attempt: 1200 * attempt,
+         avg_mem = lambda wildcards, attempt: 1200 * attempt,
+         mem_mb = lambda wildcards, attempt: 2400 * attempt,
          walltime_min = lambda wildcards, attempt: 20 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
@@ -753,8 +753,8 @@ rule final_mcalls:
          bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
          pickle = fp_to_pickle(final_mcalls_cyt_bed),
     resources:
-         avg_mem = lambda wildcards, attempt: 3000 * attempt,
-         mem_mb = lambda wildcards, attempt: 5000 * attempt,
+         avg_mem = lambda wildcards, attempt: 4000 * attempt,
+         mem_mb = lambda wildcards, attempt: 8000 * attempt,
          walltime_min = lambda wildcards, attempt: 20 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
@@ -1111,9 +1111,9 @@ rule meth_calling_qc:
     output:
         done = touch(config['result_patterns']['meth_calling_qc_prefix'] + '.qc-done'),
     resources:
-         avg_mem = lambda wildcards, attempt: 4000 * attempt,
-         mem_mb = lambda wildcards, attempt: 4000 * attempt,
-         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         avg_mem = lambda wildcards, attempt: 8000 * attempt,
+         mem_mb = lambda wildcards, attempt: 8000 * attempt,
+         walltime_min = lambda wildcards, attempt: 30 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
         metadata_table_expanded = lambda wildcards: smk_wgbs.tools.expand_mcalls_metadata_table(
