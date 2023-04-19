@@ -164,7 +164,7 @@ def create_mcalls_metadata_table(
             )
         else:
             files_df = pd.DataFrame({"path": expanded_pattern})
-        for field_name, field_value in curr_fields_ser.iteritems():
+        for field_name, field_value in curr_fields_ser.items():
             files_df[field_name] = field_value
         df_l.append(files_df)
     metadata_table = pd.concat(df_l)
