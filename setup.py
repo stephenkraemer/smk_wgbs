@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
         name='smk_wgbs',
-        version='0.1',
+        version='0.2',
         author='Stephen Kraemer',
         author_email='stephenkraemer@gmail.com',
         license='MIT',

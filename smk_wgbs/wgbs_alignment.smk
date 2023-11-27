@@ -1,8 +1,4 @@
 """
-export PATH=/home/kraemers/projects/Bismark:$PATH
-
-cd /icgc/dkfzlsdf/analysis/hs_ontogeny
-
 snakemake \
 --snakefile $(smk_wgbs_snakefile) \
 --latency-wait 60 \
@@ -125,19 +121,24 @@ for pattern_name, pattern in config['database_patterns'].items():
 # Prepare metadata table and adjust uid fields
 # ======================================================================
 
+# metadata table is either read from config['metadata_table_tsv'] or created from config['fastq_pattern']
+
+# a common usage is to mostly rely on a fastq pattern, but use a metadata table when
+# naming errors must be fixed
+# therefore, we allow both fastq_pattern and metadata_table_tsv to be defined and
+# give precedence to metadata_table_tsv
+
 # if a fastq_pattern is provided, it must have the fields: entity, sample, read_number and it must additionally have at least one additional field which serves to distinguish read pairs.
 # The fastq_pattern is then used to create a metadata table with one column per field (using smk_wgbs.create_metadata_table_from_file_pattern).
-# The metadata table is placed at metadata_table_tsv (with a timestamp before the suffix)
-# without fastq_pattern: metadata table is read from metadata_table_tsv
-if config.get('fastq_pattern') and config.get('metadata_table_tsv'):
-    raise ValueError()
 
-if 'fastq_pattern' in config:
-    metadata_table = smk_wgbs.tools.metadata_table_from_fastq_pattern(config)
-else:  # metadata_table_tsv given
+if 'metadata_table_tsv' in config:
+    # the code expects metadata tables as created by `smk_wgbs.tools.metadata_table_from_fastq_pattern(config)`
+    # currently, the function produces a metadata table with str dtype for all columns
     metadata_table = pd.read_csv(
-            config['metadata_table_tsv'], sep='\t', header=0, index=False
-    )
+            config['metadata_table_tsv'], sep='\t', header=0,
+    ).astype(str)
+else:
+    metadata_table = smk_wgbs.tools.metadata_table_from_fastq_pattern(config)
 
 uid_columns = metadata_table.columns[
     ~metadata_table.columns.isin(
@@ -299,8 +300,8 @@ rule bismark_se_atomic_alignment:
           temp_dir = temp(directory(config['result_patterns']['se_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
     resources:
-        avg_mem = lambda wildcards, attempt: 16000,
-        mem_mb = lambda wildcards, attempt: 16000,
+        avg_mem = lambda wildcards, attempt: 18 * 1024,
+        mem_mb = lambda wildcards, attempt: 18 * 1024,
         walltime_min = bismark_se_alignment_get_walltime,
         attempt = lambda wildcards, attempt: attempt,
     params:
@@ -347,8 +348,8 @@ rule bismark_pe_atomic_alignment:
           temp_dir = temp(directory(config['result_patterns']['pe_atomic_bam_unsorted'] + '___bismark_tempfiles'))
     # non specified output files: will not be auto-removed
     resources:
-         avg_mem = lambda wildcards, attempt: 16000,
-         mem_mb = lambda wildcards, attempt: 16000,
+         avg_mem = lambda wildcards, attempt: 18 * 1024,
+         mem_mb = lambda wildcards, attempt: 18 * 1024,
          walltime_min = bismark_pe_alignment_get_walltime,
          # walltime_min = '00:30',
          attempt = lambda wildcards, attempt: attempt,
@@ -707,8 +708,8 @@ rule methyldackel_merge_context:
         parquet = fp_to_parquet(config['result_patterns']['pe_or_se_mcalls_merged_per_motif']),
         pickle = fp_to_pickle(config['result_patterns']['pe_or_se_mcalls_merged_per_motif'])
     resources:
-         avg_mem = lambda wildcards, attempt: 800 * attempt,
-         mem_mb = lambda wildcards, attempt: 1200 * attempt,
+         avg_mem = lambda wildcards, attempt: 1200 * attempt,
+         mem_mb = lambda wildcards, attempt: 2400 * attempt,
          walltime_min = lambda wildcards, attempt: 20 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
@@ -757,9 +758,9 @@ rule final_mcalls:
          bedgraph = fp_to_bedgraph(final_mcalls_cyt_bed),
          pickle = fp_to_pickle(final_mcalls_cyt_bed),
     resources:
-         avg_mem = lambda wildcards, attempt: 3000 * attempt,
-         mem_mb = lambda wildcards, attempt: 5000 * attempt,
-         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         avg_mem = lambda wildcards, attempt: 12_000 * attempt,
+         mem_mb = lambda wildcards, attempt: 32_000 * attempt,
+         walltime_min = lambda wildcards, attempt: 120 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
           name = 'merge-final-calls_{entity}_{sample}'
@@ -778,9 +779,9 @@ rule final_mcalls_merged_motifs:
          parquet = fp_to_parquet(final_mcalls_merged_bed),
          pickle = fp_to_pickle(final_mcalls_merged_bed),
     resources:
-         avg_mem = lambda wildcards, attempt: 600 * attempt,
-         mem_mb = lambda wildcards, attempt: 1000 * attempt,
-         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         avg_mem = lambda wildcards, attempt: 6000 * attempt,
+         mem_mb = lambda wildcards, attempt: 10000 * attempt,
+         walltime_min = lambda wildcards, attempt: 120 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
           name = 'merge-context_final-mcalls_{entity}_{sample}_{motif}',
@@ -821,11 +822,9 @@ rule bismark_genome_preparation:
     resources:
          avg_mem = lambda wildcards, attempt: 20000,
          mem_mb = lambda wildcards, attempt: 24000,
-         walltime_min = lambda wildcards, attempt: 8 * 60 * attempt,
+         walltime_min = lambda wildcards, attempt: 24 * 60 * attempt,
          attempt = lambda wildcards, attempt: attempt,
-    params:
-        name = 'ref_conversion',
-    threads: 64
+    threads: 32
     # message: "Converting Genome into Bisulfite analogue"
     shell:
          """
@@ -834,14 +833,12 @@ rule bismark_genome_preparation:
          else
              bismark_genome_preparation \
              --bowtie2 \
-             --parallel 32 \
+             --parallel 16 \
              --genomic_composition \
              --verbose \
-             {input} \
-             > {log} 2>&1
+             {input}
          fi
          """
-
 
 # ==========================================================================================
 # Trim the reads for adapter-ends and quality
@@ -1093,7 +1090,7 @@ rule multiqc_read_level:
               )
 
 
-meth_calling_qc_metadata_table = smk_wgbs.tools.create_mcalls_metadata_table(
+meth_calling_qc_metadata_table = smk_wgbs.tools.create_mcalls_pattern_table(
         config, sampling_name
 )
 
@@ -1119,9 +1116,9 @@ rule meth_calling_qc:
     output:
         done = touch(config['result_patterns']['meth_calling_qc_prefix'] + '.qc-done'),
     resources:
-         avg_mem = lambda wildcards, attempt: 4000 * attempt,
-         mem_mb = lambda wildcards, attempt: 4000 * attempt,
-         walltime_min = lambda wildcards, attempt: 20 * attempt,
+         avg_mem = lambda wildcards, attempt: 48000 * attempt,
+         mem_mb = lambda wildcards, attempt: 48000 * attempt,
+         walltime_min = lambda wildcards, attempt: 300 * attempt,
          attempt = lambda wildcards, attempt: attempt,
     params:
         metadata_table_expanded = lambda wildcards: smk_wgbs.tools.expand_mcalls_metadata_table(

@@ -1,0 +1,27 @@
+name: smk_wgbs_dev
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - attrs
+  - bismark
+  - cutadapt
+  - fastq-screen
+  - fastqc
+  - htslib=1.9
+  - ipython
+  - methyldackel=0.4
+  - more-itertools
+  - multiqc
+  - numpy
+  - pandas
+  - picard
+  - pip
+  - pyarrow
+  - python
+  - pyyaml
+  - r-base
+  - samtools=1.9
+  - snakemake
+  - yaml
